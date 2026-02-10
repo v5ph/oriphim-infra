@@ -1,0 +1,23 @@
+[project]
+name = "oriphim-v-layer"
+version = "1.0.0"
+description = "High-speed headless validation layer for AI outputs"
+requires-python = ">=3.10"
+
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn>=0.27",
+  "pydantic>=2.6",
+  "numpy>=1.26",
+  "scipy>=1.12"
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
