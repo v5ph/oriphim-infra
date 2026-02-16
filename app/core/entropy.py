@@ -1,6 +1,8 @@
 from typing import List, Dict
 import math
 import re
+import numpy as np
+from sentence_transformers import SentenceTransformer
 
 
 def semantic_entropy(samples: List[str]) -> float:
@@ -22,33 +24,34 @@ def semantic_entropy(samples: List[str]) -> float:
     return min(entropy / max_entropy, 1.0)
 
 
+_EMBEDDING_MODEL: SentenceTransformer | None = None
+
+
 def hallucination_divergence(responses: List[str]) -> float:
     """
     Measures mathematical divergence between three responses using
-    pairwise Jensen-Shannon Divergence (JSD) over token distributions.
+    semantic embeddings (all-MiniLM-L6-v2) and pairwise cosine distance.
     Returns a score in [0.0, 1.0].
     """
     if len(responses) != 3:
         raise ValueError("hallucination_divergence expects exactly 3 responses")
 
-    token_lists = [_tokenize(r) for r in responses]
-    token_counts = [len(tokens) for tokens in token_lists]
-
-    if sum(token_counts) == 0:
+    if all(not r.strip() for r in responses):
         return 0.0
 
-    if any(count == 0 for count in token_counts) and any(count > 0 for count in token_counts):
+    if any(not r.strip() for r in responses) and any(r.strip() for r in responses):
         return 1.0
 
-    vocab = sorted({token for tokens in token_lists for token in tokens})
-    distributions = [_to_distribution(tokens, vocab) for tokens in token_lists]
+    model = _get_embedding_model()
+    embeddings = model.encode(responses, normalize_embeddings=True)
 
-    pairs = [(0, 1), (0, 2), (1, 2)]
-    jsd_values = [
-        _js_divergence(distributions[i], distributions[j]) for i, j in pairs
-    ]
+    cos_01 = float(np.dot(embeddings[0], embeddings[1]))
+    cos_02 = float(np.dot(embeddings[0], embeddings[2]))
+    cos_12 = float(np.dot(embeddings[1], embeddings[2]))
 
-    return sum(jsd_values) / len(jsd_values)
+    avg_cos = (cos_01 + cos_02 + cos_12) / 3.0
+    score = (1.0 - avg_cos) / 2.0
+    return float(min(max(score, 0.0), 1.0))
 
 
 def _tokenize(text: str) -> List[str]:
@@ -80,3 +83,10 @@ def _kl_divergence(p: Dict[str, float], m: Dict[str, float]) -> float:
         m_i = m[term]
         total += p_i * math.log(p_i / m_i, 2)
     return total
+
+
+def _get_embedding_model() -> SentenceTransformer:
+    global _EMBEDDING_MODEL
+    if _EMBEDDING_MODEL is None:
+        _EMBEDDING_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
+    return _EMBEDDING_MODEL

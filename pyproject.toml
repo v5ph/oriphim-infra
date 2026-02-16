@@ -1,5 +1,5 @@
 [project]
-name = "oriphim-v-layer"
+name = "watcher-protocal"
 version = "1.0.0"
 description = "High-speed headless validation layer for AI outputs"
 requires-python = ">=3.10"
@@ -9,7 +9,17 @@ dependencies = [
   "uvicorn>=0.27",
   "pydantic>=2.6",
   "numpy>=1.26",
-  "scipy>=1.12"
+  "scipy>=1.12",
+  "sentence-transformers>=2.6"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "httpx>=0.27"
+]
+test-llm = [
+  "openai>=1.3"
 ]
 
 [build-system]
