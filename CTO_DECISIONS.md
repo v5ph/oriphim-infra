@@ -270,4 +270,4 @@ For HFT clients (sub-10ms requirements):
 These decisions are FINAL. No committee reviews. No "let's revisit in Q2."
 Ship the SDK. Launch on Feb 22. Iterate based on customer feedback.
 
-— CTO, Oriphim
+— FOUNDER, Oriphim
