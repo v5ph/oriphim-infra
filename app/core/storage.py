@@ -1,21 +1,65 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DB_PATH = Path(__file__).resolve().parents[2] / ".watcher_demo.db"
+try:
+    import sqlcipher3.dbapi2 as sqlcipher
+    ENCRYPTION_AVAILABLE = True
+except ImportError:
+    sqlcipher = None
+    ENCRYPTION_AVAILABLE = False
+
+_DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / ".watcher_demo.db"
+DB_PATH = Path(os.getenv("SQLITE_DB_PATH", str(_DEFAULT_DB_PATH))).expanduser().resolve()
 
 _LOCK = threading.Lock()
+_SNAPSHOT_MEMOIZER: Dict[str, Dict[str, Any]] = {}  # agent_id -> latest valid snapshot (hot cache)
+
+
+def _get_encryption_key() -> Optional[str]:
+    """Get database encryption key from environment."""
+    key = os.getenv("DATABASE_ENCRYPTION_KEY")
+    if key and len(key) == 64:
+        return f"x'{key}'"
+    return None
 
 
 def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH.as_posix(), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """
+    Create database connection with optional encryption.
+    
+    If DATABASE_ENCRYPTION_KEY is set and sqlcipher3 available, uses encrypted connection.
+    Otherwise falls back to standard SQLite (logs warning).
+    """
+    encryption_key = _get_encryption_key()
+    
+    if encryption_key and ENCRYPTION_AVAILABLE:
+        # Use SQLCipher for encryption at rest
+        conn = sqlcipher.connect(DB_PATH.as_posix(), check_same_thread=False)
+        conn.execute(f"PRAGMA key = {encryption_key}")
+        conn.execute("PRAGMA cipher_page_size = 4096")
+        conn.execute("PRAGMA kdf_iter = 256000")  # PBKDF2 iterations
+        conn.row_factory = sqlite3.Row
+        return conn
+    else:
+        # Fallback to standard SQLite
+        if encryption_key and not ENCRYPTION_AVAILABLE:
+            import logging
+            logging.warning(
+                "DATABASE_ENCRYPTION_KEY set but sqlcipher3 not available. "
+                "Install with: pip install sqlcipher3. "
+                "Using UNENCRYPTED database."
+            )
+        conn = sqlite3.connect(DB_PATH.as_posix(), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 
 def init_db() -> None:
@@ -63,10 +107,15 @@ def init_db() -> None:
                 violations_json TEXT,
                 regulatory_articles_json TEXT,
                 message TEXT,
+                prev_hash TEXT,
+                event_hash TEXT,
                 created_at TEXT
             )
             """
         )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_agent ON audit_log(agent_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)")
+        
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS state_snapshots (
@@ -81,6 +130,9 @@ def init_db() -> None:
             )
             """
         )
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_snapshot_agent_valid ON state_snapshots(agent_id, valid)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_snapshot_agent_created ON state_snapshots(agent_id, created_at)")
+        
         conn.commit()
         conn.close()
 
@@ -196,14 +248,43 @@ def insert_audit_event(
     regulatory_articles: List[str],
     message: str,
 ) -> int:
+    """Insert audit event with hash chaining for cryptographic immutability.
+    
+    Each event includes prev_hash (chain link) and event_hash (content hash).
+    Regulators can verify: hash(prev_hash + event_json) == event_hash
+    """
     with _LOCK:
         conn = _connect()
         cur = conn.cursor()
+        
+        # Get previous audit event hash for chaining
+        cur.execute(
+            "SELECT event_hash FROM audit_log WHERE agent_id = ? ORDER BY audit_id DESC LIMIT 1",
+            (agent_id,) if agent_id else (None,),
+        )
+        prev_row = cur.fetchone()
+        prev_hash = prev_row["event_hash"] if prev_row else "0" * 64
+        
+        # Build event JSON for hashing
+        event_data = {
+            "request_id": request_id,
+            "agent_id": agent_id,
+            "event_type": event_type,
+            "violations": violations,
+            "regulatory_articles": regulatory_articles,
+            "message": message,
+        }
+        event_json = json.dumps(event_data, sort_keys=True)
+        
+        # Hash chain: SHA256(prev_hash + event_json)
+        chain_input = (prev_hash + event_json).encode("utf-8")
+        event_hash = hashlib.sha256(chain_input).hexdigest()
+        
         cur.execute(
             """
             INSERT INTO audit_log
-            (request_id, agent_id, event_type, violations_json, regulatory_articles_json, message, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (request_id, agent_id, event_type, violations_json, regulatory_articles_json, message, prev_hash, event_hash, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 request_id,
@@ -212,6 +293,8 @@ def insert_audit_event(
                 json.dumps(violations),
                 json.dumps(regulatory_articles),
                 message,
+                prev_hash,
+                event_hash,
                 datetime.utcnow().isoformat(),
             ),
         )
@@ -281,10 +364,26 @@ def insert_state_snapshot(
         snapshot_id = cur.lastrowid
         conn.commit()
         conn.close()
+        
+        # Invalidate hot cache for this agent (new snapshot is more recent)
+        if agent_id in _SNAPSHOT_MEMOIZER:
+            del _SNAPSHOT_MEMOIZER[agent_id]
+        
         return int(snapshot_id)
 
 
 def get_latest_valid_snapshot(agent_id: str) -> Optional[Dict[str, Any]]:
+    """Fast-lane retrieval with in-memory memoization. Target: <100ms latency.
+    
+    Two-tier lookup:
+    1. Check hot cache (_SNAPSHOT_MEMOIZER) → O(1) instant
+    2. Query DB only if cache miss → O(log n) with index
+    """
+    # Tier 1: Hot cache (already loaded this session)
+    if agent_id in _SNAPSHOT_MEMOIZER:
+        return _SNAPSHOT_MEMOIZER[agent_id]
+    
+    # Tier 2: Database lookup with index
     with _LOCK:
         conn = _connect()
         cur = conn.cursor()
@@ -300,7 +399,8 @@ def get_latest_valid_snapshot(agent_id: str) -> Optional[Dict[str, Any]]:
         conn.close()
         if row is None:
             return None
-        return {
+        
+        result = {
             "snapshot_id": row["snapshot_id"],
             "agent_id": row["agent_id"],
             "request_id": row["request_id"],
@@ -309,6 +409,10 @@ def get_latest_valid_snapshot(agent_id: str) -> Optional[Dict[str, Any]]:
             "variables": json.loads(row["variables_json"]),
             "created_at": row["created_at"],
         }
+        
+        # Populate hot cache for next access
+        _SNAPSHOT_MEMOIZER[agent_id] = result
+        return result
 
 
 init_db()

@@ -2,6 +2,55 @@
 
 High-speed headless API that intercepts AI agent outputs and validates them against hard constraints. Production-ready Python implementation shipping Feb 22, 2026.
 
+## 🎯 NEW: Enterprise Onboarding System (Phase 1 Complete!)
+
+**Feb 21, 2026**: Complete multi-tenant onboarding infrastructure is now live.
+
+✅ **What's Included:**
+- Tenant provisioning and multi-tenancy
+- Role-based access control (RBAC: admin, risk-officer, analyst, viewer)
+- API key management with bcrypt hashing + auto-rotation ready
+- Immutable audit logging with cryptographic chain verification
+- Identity-aware middleware + authorization checks
+- 10-phase roadmap to enterprise SaaS compliance
+
+📖 **Start Here:**
+- [Onboarding Architecture](ONBOARDING_SYSTEM.md) - Complete 1000-line spec (all 10 phases)
+- [Implementation Checklist](ONBOARDING_CHECKLIST.md) - Phase-by-phase roadmap
+- [Quick Reference](ONBOARDING_QUICK_REF.md) - Developer API guide
+
+**5-Minute Integration:**
+```python
+from app.core.onboarding import create_tenant, create_user, generate_api_key
+
+# Create org
+tenant = create_tenant("Acme Trading", "acmetrading.com", support_tier="premium")
+
+# Add team member
+admin = create_user(tenant["tenant_id"], "admin@acmetrading.com", "admin")
+
+# Generate API key (save securely!)
+key = generate_api_key(tenant["tenant_id"], admin["user_id"], scope="admin")
+print(key["api_key"])
+```
+
+---
+
+## 🚀 Core Validation System
+
+### Red-Line Demo
+Want to see Oriphim in action? Check out the **Hallucination Trap Demo**:
+
+```bash
+python demo/run_demo.py
+```
+
+This demo shows **unprotected AI (catastrophic loss) vs. Oriphim-protected AI (deterministic safety)** in parallel terminals. Perfect for investor/board presentations.
+
+📖 [Full Demo Guide](demo/QUICKSTART.md)
+
+---
+
 ## Current Status
 
 ✅ **Python Implementation Complete**
@@ -9,6 +58,23 @@ High-speed headless API that intercepts AI agent outputs and validates them agai
 - Core validation modules working
 - Test suite passing (10+ hallucination trap tests)
 - Deployment ready
+
+✅ **Enterprise Onboarding Complete (Phase 1)**
+- Multi-tenant system with tenant isolation
+- Role-based access control (RBAC)
+- API key management with secure hashing
+- Immutable audit logging with cryptographic verification
+- REST API for all identity operations
+
+📋 **Roadmap** (Phases 2-10)
+- Phase 2: Key rotation + SLA monitoring
+- Phase 3: Multi-region + environment config
+- Phase 4: Policy templates + constraint bundles
+- Phase 5: Test harness + certification
+- Phase 6: Operational telemetry + alerting
+- Phase 7: Compliance reports + evidence generation
+- Phase 8: Support + escalation workflows
+- Phase 9: Change management + version control
 
 ⏳ **Rust Optimization (Optional Phase 2)**
 - Scaffolded in `rust-future/` directory
@@ -24,6 +90,12 @@ Install dependencies:
 pip install -e .
 ```
 
+Initialize onboarding system:
+```python
+from app.core.onboarding import init_onboarding_db
+init_onboarding_db()
+```
+
 Run API:
 
 ```bash
@@ -34,14 +106,21 @@ API will be available at `http://localhost:8000`
 
 ## Endpoints
 
-### v1 (Legacy)
+### v1: Onboarding (NEW)
+- `POST /v1/onboarding/tenants` - Create tenant
+- `POST /v1/onboarding/tenants/{tenant_id}/users` - Add user
+- `POST /v1/onboarding/tenants/{tenant_id}/api-keys` - Generate API key
+- `GET /v1/onboarding/tenants/{tenant_id}/audit-log` - View audit trail
+- [Full endpoint reference](ONBOARDING_QUICK_REF.md)
+
+### v1: Legacy Validation
 - `POST /v1/validate` - Basic constraint + entropy validation
 
-### v2 (Current Primary)
+### v2: Current Primary Validation
 - `POST /v2/validate` - Enhanced validation with timestamps and audit logging
 - `GET /v2/health` - Health check endpoint
 
-### v3 (Intent & Compliance)
+### v3: Intent & Compliance
 - `POST /v3/intent` - Validate specific intent with full validation suite
 - `GET /v3/intent/{uuid}` - Retrieve specific validation result
 - `POST /v3/rewind/{agent_id}` - Rewind agent state to previous validation
@@ -84,7 +163,7 @@ API will be available at `http://localhost:8000`
   "violations": ["Semantic divergence exceeds 0.7 threshold"],
   "timestamp": "2026-02-17T12:34:56.789Z"
 }
-```
+`````
 
 ### Hard Constraint Violated (422)
 

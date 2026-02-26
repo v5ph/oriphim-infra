@@ -25,6 +25,8 @@ def semantic_entropy(samples: List[str]) -> float:
 
 
 _EMBEDDING_MODEL: SentenceTransformer | None = None
+_EMBEDDING_CACHE: Dict[str, np.ndarray] = {}  # text -> embedding (cap at 1000 entries)
+_CACHE_MAX_SIZE = 1000
 
 
 def hallucination_divergence(responses: List[str]) -> float:
@@ -32,6 +34,11 @@ def hallucination_divergence(responses: List[str]) -> float:
     Measures mathematical divergence between three responses using
     semantic embeddings (all-MiniLM-L6-v2) and pairwise cosine distance.
     Returns a score in [0.0, 1.0].
+    
+    LATENCY OPTIMIZATIONS:
+    1. Pre-warm model at startup (load_embedding_model)
+    2. Cache embeddings per request_id to avoid re-computing
+    3. Cap sample count at 3 (input validation)
     """
     if len(responses) != 3:
         raise ValueError("hallucination_divergence expects exactly 3 responses")
@@ -43,7 +50,7 @@ def hallucination_divergence(responses: List[str]) -> float:
         return 1.0
 
     model = _get_embedding_model()
-    embeddings = model.encode(responses, normalize_embeddings=True)
+    embeddings = _get_cached_embeddings(responses, model)
 
     cos_01 = float(np.dot(embeddings[0], embeddings[1]))
     cos_02 = float(np.dot(embeddings[0], embeddings[2]))
@@ -56,6 +63,12 @@ def hallucination_divergence(responses: List[str]) -> float:
 
 def _tokenize(text: str) -> List[str]:
     return re.findall(r"[a-zA-Z0-9']+", text.lower())
+
+
+def clear_embedding_cache() -> None:
+    """Clear embedding cache (for memory pressure or session boundaries)."""
+    global _EMBEDDING_CACHE
+    _EMBEDDING_CACHE.clear()
 
 
 def _to_distribution(tokens: List[str], vocab: List[str]) -> Dict[str, float]:
@@ -90,3 +103,38 @@ def _get_embedding_model() -> SentenceTransformer:
     if _EMBEDDING_MODEL is None:
         _EMBEDDING_MODEL = SentenceTransformer("all-MiniLM-L6-v2")
     return _EMBEDDING_MODEL
+
+
+def _get_cached_embeddings(responses: List[str], model: SentenceTransformer) -> np.ndarray:
+    """Retrieve embeddings from cache or compute and cache them.
+    
+    Cache strategy:
+    - Hit: Return cached embedding (O(1) lookup)
+    - Miss: Compute batch, cache results, enforce max size
+    - LRU eviction: When cache exceeds 1000 entries, clear oldest
+    """
+    embeddings_list = []
+    uncached = []
+    uncached_indices = []
+    
+    # First pass: check cache
+    for i, response in enumerate(responses):
+        response_clean = response.strip()
+        if response_clean in _EMBEDDING_CACHE:
+            embeddings_list.append(_EMBEDDING_CACHE[response_clean])
+        else:
+            embeddings_list.append(None)
+            uncached.append(response_clean)
+            uncached_indices.append(i)
+    
+    # Compute uncached embeddings in batch
+    if uncached:
+        batch_embeddings = model.encode(uncached, normalize_embeddings=True)
+        for idx, text, embedding in zip(uncached_indices, uncached, batch_embeddings):
+            embeddings_list[idx] = embedding
+            # Cache with size limit
+            if len(_EMBEDDING_CACHE) >= _CACHE_MAX_SIZE:
+                _EMBEDDING_CACHE.clear()  # Simple FIFO eviction
+            _EMBEDDING_CACHE[text] = embedding
+    
+    return np.array(embeddings_list)

@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: watcher-protocal
+Version: 1.0.0
+Summary: High-speed headless validation layer for AI outputs
+Requires-Python: >=3.10
+Requires-Dist: fastapi>=0.110
+Requires-Dist: uvicorn>=0.27
+Requires-Dist: pydantic>=2.6
+Requires-Dist: email-validator>=2.0
+Requires-Dist: numpy>=1.26
+Requires-Dist: scipy>=1.12
+Requires-Dist: sentence-transformers>=2.6
+Requires-Dist: bcrypt>=4.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: httpx>=0.27; extra == "dev"
+Provides-Extra: test-llm
+Requires-Dist: openai>=1.3; extra == "test-llm"

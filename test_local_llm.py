@@ -172,7 +172,7 @@ def test_extreme_leverage():
 def test_negative_absolute_zero():
     """Test: Ask LLM about physics below absolute zero."""
     print("\n" + "="*80)
-    print("TEST: Temperature Below Absolute Zero")
+    print("TEST: Model Parameter Below Minimum Bound")
     print("="*80)
 
     prompt = (

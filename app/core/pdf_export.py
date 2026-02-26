@@ -11,11 +11,32 @@ def _escape_pdf_text(text: str) -> str:
 def generate_audit_pdf(title: str, entries: List[Dict[str, str]]) -> bytes:
     """
     Minimal single-page PDF generator without external dependencies.
+    
+    AUDIT-READY ARCHITECTURE:
+    - Includes hash chain information for tamper-evidence
+    - Each entry includes prev_hash + event_hash for regulatory verification
+    - CRO can validate: SHA256(prev_hash + event_json) == event_hash
     """
     lines = [f"{title} - {datetime.utcnow().isoformat()}", ""]
+    
+    # Add regulatory verification note
+    lines.append("=" * 80)
+    lines.append("TAMPER-EVIDENCE: This audit trail is cryptographically chained.")
+    lines.append("Verify with: SHA256(prev_hash + event_json) == event_hash")
+    lines.append("=" * 80)
+    lines.append("")
+    
     for entry in entries:
-        line = f"[{entry.get('created_at','')}] {entry.get('event_type','')}: {entry.get('message','')}"
-        lines.append(line[:120])
+        # Include hash chain if available
+        prev_hash = entry.get("prev_hash", "")
+        event_hash = entry.get("event_hash", "")
+        hash_suffix = ""
+        if event_hash:
+            hash_suffix = f" [HASH: {event_hash[:16]}...]"
+        
+        line = f"[{entry.get('created_at','')}] {entry.get('event_type','')}: {entry.get('message','')}{hash_suffix}"
+        lines.append(line[:140])  # Slightly longer line to accommodate hash
+    
     if not lines:
         lines = [title, "No audit events found."]
 
@@ -23,11 +44,13 @@ def generate_audit_pdf(title: str, entries: List[Dict[str, str]]) -> bytes:
     y = 760
     for line in lines:
         content_lines.append(f"1 0 0 1 50 {y} Tm ({_escape_pdf_text(line)}) Tj")
-        y -= 16
+        y -= 14  # Smaller line spacing to fit more
         if y < 60:
+            # Truncate if too many lines
+            content_lines.append(f"1 0 0 1 50 {y} Tm (... [additional entries truncated]) Tj")
             break
 
-    content = "\n".join(["BT", "/F1 12 Tf"] + content_lines + ["ET"])
+    content = "\n".join(["BT", "/F1 10 Tf"] + content_lines + ["ET"])
 
     objects = []
     objects.append("1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj")

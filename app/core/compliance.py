@@ -4,16 +4,16 @@ from typing import List
 
 
 EU_AI_ACT_ARTICLES = {
-    "Conservation of Energy violated": "EU-AIA-12-RecordKeeping",
-    "Temperature below absolute zero": "EU-AIA-12-RecordKeeping",
-    "Negative pressure is invalid for this model": "EU-AIA-12-RecordKeeping",
-    "Leverage ratio exceeds hard limit": "EU-AIA-14-HumanOversight",
-    "VaR loss threshold exceeded": "EU-AIA-14-HumanOversight",
+    "Balance invariant breached": "EU-AIA-12-RecordKeeping",
+    "Model parameter below minimum bound": "EU-AIA-12-RecordKeeping",
+    "Model parameter invalid: negative pressure": "EU-AIA-12-RecordKeeping",
+    "Leverage limit breached": "EU-AIA-14-HumanOversight",
+    "VaR loss limit breached": "EU-AIA-14-HumanOversight",
 }
 
 CA_SB243_ARTICLES = {
-    "Leverage ratio exceeds hard limit": "CA-SB243-FinancialSafety",
-    "VaR loss threshold exceeded": "CA-SB243-FinancialSafety",
+    "Leverage limit breached": "CA-SB243-FinancialSafety",
+    "VaR loss limit breached": "CA-SB243-FinancialSafety",
 }
 
 

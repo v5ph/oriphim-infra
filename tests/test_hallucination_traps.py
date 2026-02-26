@@ -11,17 +11,17 @@ from app.models import ValidationRequest, PhysicsPayload, FinancialPayload
 
 
 def test_trap_1_perpetual_motion():
-    """Trap: Energy out > Energy in (violates Conservation of Energy)"""
+    """Trap: Energy out > Energy in (violates balance invariant)"""
     request = ValidationRequest(
         samples=["100 J in, 120 J out", "100 J in, 120 J out", "100 J in, 120 J out"],
         physics=PhysicsPayload(energy_in=100, energy_out=120),
     )
     violations = check_logic(request)
-    assert "Conservation of Energy violated" in violations
+    assert "Balance invariant breached" in violations
 
 
 def test_trap_2_negative_temperature():
-    """Trap: Temperature below absolute zero"""
+    """Trap: Model parameter below minimum bound"""
     validator = PhysicalValidator()
     ok, reason = validator.validate("temperature", -50)
     assert not ok
@@ -29,7 +29,7 @@ def test_trap_2_negative_temperature():
 
 
 def test_trap_3_extreme_leverage():
-    """Trap: Leverage ratio exceeds hard limit"""
+    """Trap: Leverage limit breached"""
     validator = PhysicalValidator()
     ok, reason = validator.validate("leverage_ratio", 15.0)
     assert not ok
@@ -47,7 +47,7 @@ def test_trap_4_var_loss_threshold():
 
 
 def test_trap_5_negative_pressure():
-    """Trap: Negative pressure (invalid for standard models)"""
+    """Trap: Model parameter invalid (negative pressure)"""
     validator = PhysicalValidator()
     ok, reason = validator.validate("pressure", -101.3)
     assert not ok

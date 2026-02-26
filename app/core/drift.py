@@ -1,10 +1,12 @@
 """
 Drift Detection & Historical Pattern Analysis
 Detects when LLM behavior degrades or changes significantly
+
+LATENCY OPTIMIZATION: Uses Welford's algorithm for O(1) incremental mean/variance
+instead of storing rolling window for O(n) recomputation each request.
 """
 
-from dataclasses import dataclass, field
-from collections import deque
+from dataclasses import dataclass
 from typing import Optional
 import statistics
 
@@ -18,27 +20,49 @@ class DriftAlert:
     explanation: str
 
 
+class IncrementalStats:
+    """Welford's online algorithm for mean/variance in O(1) space and time.
+    
+    Instead of: deque(maxlen=100) recomputing stdev each time
+    Use: M_n and M2_n tracking for O(1) updates
+    """
+    
+    def __init__(self):
+        self.count = 0
+        self.mean = 0.0
+        self.M2 = 0.0  # Running sum of squares of differences
+    
+    def update(self, value: float):
+        """Add new value using Welford's algorithm. O(1) time."""
+        self.count += 1
+        delta = value - self.mean
+        self.mean += delta / self.count
+        delta2 = value - self.mean
+        self.M2 += delta * delta2
+    
+    def get_stats(self) -> dict:
+        """Return mean and sample std_dev."""
+        if self.count < 2:
+            return {"mean": self.mean, "std_dev": 0.0, "count": self.count}
+        variance = self.M2 / (self.count - 1)
+        std_dev = variance ** 0.5
+        return {"mean": self.mean, "std_dev": std_dev, "count": self.count}
+
+
 class RequestHistory:
-    """In-memory circular buffer for tracking LLM behavior patterns."""
+    """In-memory drift tracker using Welford's algorithm for O(1) updates."""
 
     def __init__(self, window_size: int = 100):
-        self.window_size = window_size
-        self.divergence_history = deque(maxlen=window_size)
-        self.violation_counts = deque(maxlen=window_size)
+        self.window_size = window_size  # Not used in Welford, kept for API compat
+        self.stats = IncrementalStats()
 
     def record(self, divergence: float, violation_count: int):
-        """Record a validation result."""
-        self.divergence_history.append(divergence)
-        self.violation_counts.append(violation_count)
+        """Record a validation result. O(1) time."""
+        self.stats.update(divergence)
 
     def get_stats(self):
-        """Return mean and std dev of recent history."""
-        if len(self.divergence_history) < 2:
-            return {"mean": 0.0, "std_dev": 0.0, "count": len(self.divergence_history)}
-
-        mean = statistics.mean(self.divergence_history)
-        std_dev = statistics.stdev(self.divergence_history)
-        return {"mean": mean, "std_dev": std_dev, "count": len(self.divergence_history)}
+        """Return mean and std dev of all history."""
+        return self.stats.get_stats()
 
     def detect_drift(self, current_divergence: float) -> DriftAlert:
         """

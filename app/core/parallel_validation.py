@@ -16,6 +16,24 @@ from app.models import AgentIntentRequest
 LATENCY_GUARD_SECONDS = 0.2
 
 
+def _compute_action_label(status_code: int, action: str, severity_overall: float, confidence_score: float) -> tuple[str, str]:
+    """Compute CRO-friendly action_label and action_reason for single-line decisions.
+    
+    Returns (action_label: str, action_reason: str)
+    """
+    if status_code == 424:
+        return ("BLOCK", "Constraint violation prevents execution (424 Sentinel)")
+    elif action == "BLOCK":
+        return ("BLOCK", "Critical violation detected; manual review required")
+    elif action == "REVIEW":
+        risk = "high" if confidence_score < 0.5 else "moderate"
+        return ("REVIEW", f"Requires manual review due to {risk} confidence ({confidence_score:.2f})")
+    elif action == "CAUTION":
+        return ("CAUTION", f"Latency guard triggered ({LATENCY_GUARD_SECONDS*1000:.0f}ms); process continues with flag")
+    else:  # ALLOW
+        return ("ALLOW", f"Safe to execute (confidence={confidence_score:.2f})")
+
+
 def _build_severity(violations: List[str]) -> Dict[str, Any]:
     details = [calculate_violation_severity(v, 0.0) for v in violations]
     overall = calculate_overall_severity_score(details)
@@ -34,6 +52,14 @@ def _build_severity(violations: List[str]) -> Dict[str, Any]:
 
 
 def run_parallel_validation(request_id: str, request: AgentIntentRequest) -> Dict[str, Any]:
+    """Parallel validation with 424 as IMMEDIATE SYNCHRONOUS CONTROL PATH.
+    
+    FINTECH-FIRST DESIGN:
+    1. 424 triggers instantly (not deferred)
+    2. Rewind snapshot capture is ATOMIC with validation
+    3. Compliance Forge entry written synchronously
+    4. Action label + reason computed server-side for CRO clarity
+    """
     start = time.perf_counter()
 
     entropy_score = hallucination_divergence(request.samples)
@@ -72,6 +98,49 @@ def run_parallel_validation(request_id: str, request: AgentIntentRequest) -> Dic
         status_code = 200
         recommendation = "Safe to execute"
 
+    # ====== DETERMINISTIC ENFORCEMENT: 424 = IMMEDIATE SYNC CONTROL PATH ======
+    # On 424: capture snapshot + log audit event BEFORE returning
+    if status_code == 424:
+        # 1. Snapshot capture (for Agent Rewind)
+        if request.state_snapshot:
+            insert_state_snapshot(
+                agent_id=request.agent_id,
+                request_id=request_id,
+                system_prompt=request.state_snapshot.system_prompt,
+                context=request.state_snapshot.context,
+                variables=request.state_snapshot.variables,
+                valid=False,  # Mark as invalid state pre-424
+            )
+        
+        # 2. Compliance Forge entry (regulatory articles + chain-of-thought)
+        articles = map_violations_to_articles(violations)
+        insert_audit_event(
+            request_id=request_id,
+            agent_id=request.agent_id,
+            event_type="EXECUTION_BLOCKED_424",  # Explicit 424 marker
+            violations=violations,
+            regulatory_articles=articles,
+            message=(
+                f"Execution BLOCKED (424 Sentinel). Constraint violations: {'; '.join(violations)}. "
+                f"Context reset flag: {context_reset}. Regulatory articles: {', '.join(articles)}"
+            ),
+        )
+    # On ALLOW: capture valid snapshot for rewind capability
+    elif action == "ALLOW" and request.state_snapshot:
+        insert_state_snapshot(
+            agent_id=request.agent_id,
+            request_id=request_id,
+            system_prompt=request.state_snapshot.system_prompt,
+            context=request.state_snapshot.context,
+            variables=request.state_snapshot.variables,
+            valid=True,
+        )
+
+    # Compute action_label and action_reason for CRO UI
+    action_label, action_reason = _compute_action_label(
+        status_code, action, severity["overall"], confidence.score
+    )
+
     insert_validation_result(
         request_id=request_id,
         status_code=status_code,
@@ -96,35 +165,12 @@ def run_parallel_validation(request_id: str, request: AgentIntentRequest) -> Dic
         latency_ms=latency_ms,
     )
 
-    if request.state_snapshot and action == "ALLOW":
-        insert_state_snapshot(
-            agent_id=request.agent_id,
-            request_id=request_id,
-            system_prompt=request.state_snapshot.system_prompt,
-            context=request.state_snapshot.context,
-            variables=request.state_snapshot.variables,
-            valid=True,
-        )
-
-    if status_code == 424:
-        articles = map_violations_to_articles(violations)
-        insert_audit_event(
-            request_id=request_id,
-            agent_id=request.agent_id,
-            event_type="EXECUTION_BLOCKED",
-            violations=violations,
-            regulatory_articles=articles,
-            message=(
-                "Execution blocked due to constraint violation: "
-                + "; ".join(violations)
-                + ". Context reset required."
-            ),
-        )
-
     return {
         "request_id": request_id,
         "status_code": status_code,
         "action": action,
+        "action_label": action_label,
+        "action_reason": action_reason,
         "divergence_score": entropy_score,
         "violations": violations,
         "confidence": {

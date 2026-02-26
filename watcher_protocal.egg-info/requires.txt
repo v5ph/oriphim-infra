@@ -1,0 +1,15 @@
+fastapi>=0.110
+uvicorn>=0.27
+pydantic>=2.6
+email-validator>=2.0
+numpy>=1.26
+scipy>=1.12
+sentence-transformers>=2.6
+bcrypt>=4.0
+
+[dev]
+pytest>=8.0
+httpx>=0.27
+
+[test-llm]
+openai>=1.3

@@ -13,18 +13,18 @@ class PhysicalValidator:
 
         if var in {"temperature", "temp", "kelvin"}:
             if value < 0:
-                return False, "Temperature below absolute zero"
+                return False, "Model parameter below minimum bound"
 
         if var in {"pressure", "pascal", "pa"}:
             if value < 0:
-                return False, "Negative pressure is invalid for this model"
+                return False, "Model parameter invalid: negative pressure"
 
         if var in {"leverage_ratio", "leverage", "debt_to_equity"}:
             if value > 10:
-                return False, "Leverage ratio exceeds hard limit"
+                return False, "Leverage limit breached"
 
         if var in {"var", "value_at_risk", "proposed_loss"}:
             if value < -10_000:
-                return False, "VaR loss threshold exceeded"
+                return False, "VaR loss limit breached"
 
         return True, None

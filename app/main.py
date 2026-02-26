@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from app.models import (
     ValidationRequest,
     ValidationResponse,
@@ -8,7 +9,14 @@ from app.models import (
     ParallelValidationStatus,
     RewindResponse,
 )
-from app.models_dashboard import ValidationMetrics, HealthMetrics, ConfidenceMetrics, ViolationDetail, DriftMetrics
+from app.models_dashboard import (
+    ValidationMetrics,
+    HealthMetrics,
+    ConfidenceMetrics,
+    ViolationDetail,
+    DriftMetrics,
+    IndicatorStatus,
+)
 from app.core.entropy import hallucination_divergence
 from app.core.constraints import check_logic
 from app.core.confidence import calculate_confidence
@@ -24,11 +32,99 @@ from app.core.storage import (
 )
 from app.core.compliance import map_violations_to_articles
 from app.core.pdf_export import generate_audit_pdf
+from app.core.security import get_security_headers, init_security, SecurityConfigError
+from app.routes.onboarding import router as onboarding_router
 from datetime import datetime
 from uuid import uuid4
 import json
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _compute_indicator(status_code: int, confidence_score: float, severity_overall: float) -> IndicatorStatus:
+    """Compute GREEN/YELLOW/RED indicator for CRO dashboard.
+    
+    Traffic-light logic:
+    - RED: 424, confidence < 0.5, or severity >= 3.0
+    - YELLOW: 0.5 <= confidence < 0.8 or severity 1.5-3.0
+    - GREEN: confidence >= 0.8 and status 200
+    """
+    if status_code == 424:
+        return IndicatorStatus.RED
+    if confidence_score < 0.5:
+        return IndicatorStatus.RED
+    if severity_overall >= 3.0:
+        return IndicatorStatus.RED
+    if confidence_score < 0.8 or (severity_overall >= 1.5):
+        return IndicatorStatus.YELLOW
+    if status_code == 200 and confidence_score >= 0.8:
+        return IndicatorStatus.GREEN
+    return IndicatorStatus.YELLOW  # Default to yellow if unclear
+
+
+def _compute_health_indicator(violation_rate: float, drift_detected: bool) -> IndicatorStatus:
+    """Compute system health indicator.
+    
+    - RED: violation_rate > 0.5 OR drift_detected
+    - YELLOW: 0.3 < violation_rate <= 0.5
+    - GREEN: violation_rate <= 0.3 AND NOT drift_detected
+    """
+    if violation_rate > 0.5 or drift_detected:
+        return IndicatorStatus.RED
+    if violation_rate > 0.3:
+        return IndicatorStatus.YELLOW
+    return IndicatorStatus.GREEN
 
 app = FastAPI(title="Watcher Protocal", version="2.0")
+
+# Initialize security subsystem
+try:
+    init_security()
+    logger.info("Security subsystem initialized")
+except SecurityConfigError as e:
+    logger.warning(f"Security configuration incomplete: {e}")
+    logger.warning("Some security features disabled. Configure .env for production.")
+
+# Include onboarding routes
+app.include_router(onboarding_router)
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add security headers to all responses."""
+    response = await call_next(request)
+    
+    # Apply security headers
+    security_headers = get_security_headers()
+    for header, value in security_headers.items():
+        response.headers[header] = value
+    
+    return response
+
+
+@app.middleware("http")
+async def https_enforcement_middleware(request: Request, call_next):
+    """Enforce HTTPS in production environments."""
+    enforce_https = os.getenv("ENFORCE_HTTPS", "false").lower() == "true"
+    
+    if enforce_https:
+        # Check if request came via HTTPS
+        # Note: Behind reverse proxy, check X-Forwarded-Proto header
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "")
+        scheme = forwarded_proto or request.url.scheme
+        
+        if scheme != "https":
+            # Redirect to HTTPS
+            https_url = str(request.url).replace("http://", "https://", 1)
+            return JSONResponse(
+                status_code=301,
+                content={"detail": "Redirecting to HTTPS"},
+                headers={"Location": https_url}
+            )
+    
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -95,6 +191,8 @@ def validate_advanced(request: ValidationRequest) -> ValidationMetrics:
     """
     Advanced validation endpoint with confidence, severity, and drift detection.
     Designed for dashboard consumption.
+    
+    PRIMARY CONTRACT: indicator (GREEN/YELLOW/RED) + action_label guide CRO decisions.
     """
     timestamp = datetime.utcnow()
     entropy_score = hallucination_divergence(request.samples)
@@ -144,6 +242,19 @@ def validate_advanced(request: ValidationRequest) -> ValidationMetrics:
             ),
         )
 
+    # Compute indicator and action_label for CRO clarity
+    indicator = _compute_indicator(status_code, confidence.score, overall_severity)
+    action_label = {
+        "ALLOW": "ALLOW",
+        "REVIEW": "REVIEW",
+        "BLOCK": "BLOCK",
+    }.get(action, "REVIEW")
+    action_reason = {
+        "ALLOW": f"Safe to execute (confidence={confidence.score:.2f})",
+        "REVIEW": f"Requires review: {confidence.risk_level} confidence ({confidence.score:.2f})",
+        "BLOCK": f"Execution blocked: {'; '.join(violations) if violations else 'High divergence'}",
+    }.get(action, "Unknown decision")
+
     return ValidationMetrics(
         request_id=None,
         timestamp=timestamp,
@@ -164,6 +275,9 @@ def validate_advanced(request: ValidationRequest) -> ValidationMetrics:
             current_value=drift.current_value,
             explanation=drift.explanation,
         ),
+        indicator=indicator,
+        action_label=action_label,
+        action_reason=action_reason,
         action=action,
         recommendation=recommendation,
         context_reset=context_reset,
@@ -175,6 +289,9 @@ def health_metrics() -> HealthMetrics:
     """
     System health endpoint for dashboard.
     Provides aggregated metrics about recent behavior.
+    
+    PRIMARY CONTRACT: indicator (GREEN/YELLOW/RED) is single source of truth for CRO.
+    CRO polls every 2 seconds for real-time status.
     """
     stats = request_history.get_stats()
     
@@ -193,6 +310,9 @@ def health_metrics() -> HealthMetrics:
     else:
         status = "HEALTHY"
     
+    # Compute indicator for CRO (primary interface)
+    indicator = _compute_health_indicator(violation_rate, False)  # drift_detected would be global flag
+    
     return HealthMetrics(
         uptime_requests=stats["count"],
         recent_divergence_avg=round(recent_divergence_avg, 3),
@@ -200,6 +320,7 @@ def health_metrics() -> HealthMetrics:
         drift_detected=False,  # Would check global drift state
         last_critical_violation=None,  # Would track from history
         status=status,
+        indicator=indicator,
     )
 
 

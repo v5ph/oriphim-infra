@@ -18,14 +18,14 @@ def check_logic(request: ValidationRequest | _RequestLike) -> List[str]:
 
     if request.physics is not None:
         if request.physics.energy_out > request.physics.energy_in:
-            violations.append("Conservation of Energy violated")
+            violations.append("Balance invariant breached")
         ok, reason = validator.validate("temperature", request.physics.energy_in)
         if not ok and reason:
             violations.append(reason)
 
     if request.financial is not None:
         if request.financial.proposed_loss < -LOSS_THRESHOLD:
-            violations.append("VaR loss threshold exceeded")
+            violations.append("VaR loss limit breached")
         ok, reason = validator.validate("proposed_loss", request.financial.proposed_loss)
         if not ok and reason:
             violations.append(reason)
