@@ -9,7 +9,7 @@ from app.models import (
     ParallelValidationStatus,
     RewindResponse,
 )
-from app.models_dashboard import (
+from app.models_health import (
     ValidationMetrics,
     HealthMetrics,
     ConfidenceMetrics,
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 def _compute_indicator(status_code: int, confidence_score: float, severity_overall: float) -> IndicatorStatus:
-    """Compute GREEN/YELLOW/RED indicator for CRO dashboard.
+    """Compute GREEN/YELLOW/RED validation indicator.
     
     Traffic-light logic:
     - RED: 424, confidence < 0.5, or severity >= 3.0
@@ -190,9 +190,9 @@ def validate(request: ValidationRequest) -> ValidationResponse:
 def validate_advanced(request: ValidationRequest) -> ValidationMetrics:
     """
     Advanced validation endpoint with confidence, severity, and drift detection.
-    Designed for dashboard consumption.
+    Returns validation results with health indicator.
     
-    PRIMARY CONTRACT: indicator (GREEN/YELLOW/RED) + action_label guide CRO decisions.
+    Returns indicator (GREEN/YELLOW/RED) + action_label for decision support.
     """
     timestamp = datetime.utcnow()
     entropy_score = hallucination_divergence(request.samples)
@@ -287,7 +287,7 @@ def validate_advanced(request: ValidationRequest) -> ValidationMetrics:
 @app.get("/v2/health", response_model=HealthMetrics)
 def health_metrics() -> HealthMetrics:
     """
-    System health endpoint for dashboard.
+    System health endpoint for monitoring and operations.
     Provides aggregated metrics about recent behavior.
     
     PRIMARY CONTRACT: indicator (GREEN/YELLOW/RED) is single source of truth for CRO.

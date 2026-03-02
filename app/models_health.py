@@ -1,6 +1,6 @@
 """
-Dashboard-ready data models
-Structured responses for UI consumption
+Health and validation data models
+Structured metrics for health monitoring and validation results
 """
 
 from pydantic import BaseModel
@@ -10,7 +10,7 @@ from enum import Enum
 
 
 class IndicatorStatus(str, Enum):
-    """Binary traffic-light indicator for CRO dashboard. Computed server-side."""
+    """System health indicator (GREEN/YELLOW/RED). Computed server-side."""
     GREEN = "GREEN"      # action=ALLOW, confidence >= 0.8
     YELLOW = "YELLOW"    # action=REVIEW, 0.5 <= confidence < 0.8
     RED = "RED"          # action=BLOCK, confidence < 0.5 OR status=424
@@ -71,12 +71,12 @@ class ValidationMetrics(BaseModel):
 
 
 class HealthMetrics(BaseModel):
-    """System health for dashboard.
+    """System health metrics.
     
-    PRIMARY CONTRACT FOR CRO:
-    - indicator (GREEN/YELLOW/RED) is the single source of truth
-    - CRO polls /v2/health every 2 seconds for real-time status
-    - indicator is derived from violation_rate + drift_detected + last_critical_violation
+    Indicator (GREEN/YELLOW/RED) is derived from:
+    - violation_rate
+    - drift_detected
+    - last_critical_violation
     """
     uptime_requests: int
     recent_divergence_avg: float
