@@ -2,6 +2,8 @@
 
 High-speed headless API that intercepts AI agent outputs and validates them against hard constraints. Production-ready Python implementation shipping Feb 22, 2026.
 
+Project documentation has been reorganized under [docs/README.md](docs/README.md).
+
 ## 🎯 NEW: Enterprise Onboarding System (Phase 1 Complete!)
 
 **Feb 21, 2026**: Complete multi-tenant onboarding infrastructure is now live.
@@ -276,21 +278,13 @@ pytest tests/test_hallucination_traps.py -v
 ### Demo Mode (Pre-recorded ChatGPT)
 
 ```bash
-python test_demo.py
+python scripts/manual_tests/test_demo.py
 ```
 
 Tests the system against real ChatGPT responses on:
 - Perpetual motion claims
 - 50x leverage trading
 - FTL communication proposals
-
-### Dashboard Integration Test
-
-```bash
-python test_dashboard_integration.py
-```
-
-Validates the full pipeline including storage, PDF export, and compliance logs.
 
 ### Live LLM Testing (ChatGPT Integration)
 
@@ -299,7 +293,7 @@ Test against real ChatGPT outputs (requires OpenAI API):
 ```bash
 export OPENAI_API_KEY="sk-..."
 pip install -e ".[test-llm]"
-python test_live_llm.py
+python scripts/manual_tests/test_live_llm.py
 ```
 
 **Note:** If you get a 429 quota error, check billing at https://platform.openai.com/account/billing
@@ -316,7 +310,7 @@ ollama pull mistral
 ollama serve
 
 # In another terminal:
-python test_local_llm.py
+python scripts/manual_tests/test_local_llm.py
 ```
 
 #### Option 2: LM Studio (GUI, Windows/macOS)
@@ -327,7 +321,7 @@ python test_local_llm.py
 # Click "Start Local Server"
 
 # Then:
-python test_local_llm.py
+python scripts/manual_tests/test_local_llm.py
 ```
 
 #### Option 3: Hugging Face Transformers
@@ -335,7 +329,7 @@ python test_local_llm.py
 ```bash
 pip install transformers torch
 export BACKEND=huggingface
-python test_local_llm.py
+python scripts/manual_tests/test_local_llm.py
 ```
 
 ## Architecture
@@ -496,7 +490,7 @@ make deploy-canary       # Start canary deployment
 make incidents-list      # View active incidents
 ```
 
-**Complete Documentation:** See [OPS_CLI_GUIDE.md](OPS_CLI_GUIDE.md) for comprehensive reference including:
+**Complete Documentation:** See [docs/guides/OPS_CLI_GUIDE.md](docs/guides/OPS_CLI_GUIDE.md) for comprehensive reference including:
 - Testing workflows (Tier 1-5)
 - Deployment operations
 - Incident response procedures

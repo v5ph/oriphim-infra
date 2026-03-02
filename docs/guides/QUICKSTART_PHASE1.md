@@ -7,7 +7,7 @@
 pip install -e .
 
 # Generate secure environment configuration
-python generate_env.py
+python scripts/setup/generate_env.py
 
 # Verify security configuration
 python -m app.core.security
@@ -140,7 +140,7 @@ curl -I http://localhost:8000/v2/health
 cp .env .env.backup
 
 # Generate new keys
-python generate_env.py --force
+python scripts/setup/generate_env.py --force
 
 # Restart application
 ```
@@ -179,7 +179,7 @@ pip install sqlcipher3
 
 **"JWT_SECRET_KEY not configured"**
 ```bash
-python generate_env.py
+python scripts/setup/generate_env.py
 ```
 
 **Token expired too quickly**

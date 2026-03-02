@@ -903,7 +903,7 @@ Used for demo only (not production).
 
 ---
 
-#### [test_demo.py](test_demo.py) (Root)
+#### [scripts/manual_tests/test_demo.py](../../scripts/manual_tests/test_demo.py)
 **Purpose:** Integration tests for demo scenarios
 
 **Test Cases:**
