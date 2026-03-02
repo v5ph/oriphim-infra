@@ -1,0 +1,19 @@
+{
+  "org_name": "Blakk Venture Capital",
+  "tenant_id": "c7c55f4f-4904-4e8f-9f8b-f6e3156a3444",
+  "domain": "demo.BVCapital.com",
+  "support_tier": "premium",
+  "created_at": "2026-02-27T01:17:18.475603",
+  "status": "active",
+  "users": [
+    {
+      "user_id": "5d89efcb-5f76-456a-86c2-8a454c23eb3b",
+      "email": "admin@demo.BVCapital.com",
+      "role": "admin",
+      "created_at": "2026-02-27T01:26:59.397766",
+      "status": "active"
+    }
+  ],
+  "api_keys": [],
+  "notes": "Provisioned via create_tenant.py"
+}
