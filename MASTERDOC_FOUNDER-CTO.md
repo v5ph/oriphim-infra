@@ -38,14 +38,14 @@ RESULT:   99.2% safety guarantee with ZERO latency impact to execution
 ### What the Service Does
 
 1. **Validates AI agent outputs** against hard constraints (physics, financial limits, regulatory thresholds)
-2. **Returns GREEN/YELLOW/RED indicator** for CRO dashboards in <100ms
+2. **Returns GREEN/YELLOW/RED indicator** for health monitoring in <100ms
 3. **Blocks catastrophic trades** with a 424 HTTP status code (Sentinel protocol)
 4. **Maintains audit trail** with cryptographic chain verification
 5. **Provides one-click incident recovery** via agent state rewind snapshots
 
 ### Who Uses It
 
-- **Risk Officers** (CRO, COO): Monitor AI agent health via dashboard
+- **Risk Officers** (CRO, COO): Monitor AI agent health via CLI or API
 - **Trading Desks:** Call `/v2/validate` before execution
 - **Compliance Teams:** Export audit PDFs for regulatory filings
 - **Incident Response:** Use `/v3/rewind/{agent_id}` to restore safe state
@@ -229,7 +229,7 @@ STEP 4: Incident Recovery (if needed)
 |----------|--------|---------|-----|----------|
 | `/v1/validate` | POST | Legacy binary validation | 100ms | Line 67-88 |
 | `/v2/validate` | POST | Primary sync validation with IndicatorStatus | 100ms | Line 91-176 |
-| `/v2/health` | GET | System health dashboard feed | 50ms | Line 179-205 |
+| `/v2/health` | GET | System health monitoring | 50ms | Line 179-205 |
 | `/v3/intent` | POST | Async submission (fire-and-forget) | 10ms | Line 220-233 |
 | `/v3/intent/{request_id}` | GET | Poll async result | 5ms | Line 236-250 |
 | `/v3/rewind/{agent_id}` | POST | Incident recovery (restore snapshot) | 30ms | Line 260-290 |
@@ -313,8 +313,8 @@ ParallelValidationStatus (modern):
 
 ---
 
-#### [app/models_dashboard.py](app/models_dashboard.py)
-**Purpose:** Dashboard-specific data models (for rich frontend rendering)
+#### [app/models_health.py](app/models_health.py)
+**Purpose:** Health and validation metrics data models
 
 **Key Classes:**
 
@@ -341,7 +341,7 @@ DriftMetrics:
   threshold_exceeded: bool
 ```
 
-**Fulfillment Impact:** React dashboard polls `/v2/health` every 2s, renders traffic light from `IndicatorStatus`
+**Fulfillment Impact:** Health monitoring polls `/v2/health` endpoint, interprets status from `IndicatorStatus`
 
 ---
 
@@ -448,7 +448,7 @@ calculate_confidence(divergence: float, violations: List[str]) -> ConfidenceScor
   """
 ```
 
-**Why This Matters:** Combines two independent signals (semantic divergence + constraint violations) into single metric for CRO dashboard.
+**Why This Matters:** Combines two independent signals (semantic divergence + constraint violations) into single metric for operational monitoring.
 
 **Fulfillment Impact:** CRO sees single number (0.85) instead of raw metrics. Easier to justify execution decisions to regulators.
 

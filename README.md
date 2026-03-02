@@ -484,19 +484,25 @@ cd rust-future/
 
 **Impact on existing code:** Zero. Rust modules are completely optional and won't be called unless you integrate them (you won't, unless you choose to).
 
-## Dashboard
+## Operations Interface
 
-Frontend specification ready in [DASHBOARD_PROD.txt](DASHBOARD_PROD.txt).
+All operational tasks (testing, deployment, incident response, monitoring) are performed via **make commands** that invoke the backend REST API.
 
-**Status:** Design complete, awaiting implementation  
-**Recommended Stack:** React 18, TailwindCSS, Chart.js  
-**Key Views:**
-- Validation history timeline
-- Constraint violations heatmap
-- Compliance audit trail
-- Drift anomalies
+**Quick Reference:**
+```bash
+make health-check        # System status
+make test-quick          # Run Tier 1-2 tests
+make deploy-canary       # Start canary deployment
+make incidents-list      # View active incidents
+```
 
-See dashboard spec for full details.
+**Complete Documentation:** See [OPS_CLI_GUIDE.md](OPS_CLI_GUIDE.md) for comprehensive reference including:
+- Testing workflows (Tier 1-5)
+- Deployment operations
+- Incident response procedures
+- Tenant/user/API key management
+- Monitoring and health checks
+- Security & RBAC details
 
 ## Configuration
 
