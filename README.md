@@ -346,7 +346,7 @@ python test_local_llm.py
 app/
 ├── main.py                    # FastAPI application (7 endpoints)
 ├── models.py                  # Request/Response Pydantic models
-├── models_dashboard.py        # Dashboard data structures
+├── models_health.py           # Health and validation metrics
 └── core/
     ├── entropy.py            # Semantic divergence (embeddings)
     ├── constraints.py        # Hard constraint validation
