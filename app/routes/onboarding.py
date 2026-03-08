@@ -65,6 +65,7 @@ class UserCreateRequest(BaseModel):
 
 
 class APIKeyCreateRequest(BaseModel):
+    user_id: Optional[str] = None
     scope: str = Field(..., pattern="^(validate-only|admin|read-metrics)$")
     expires_in_days: int = Field(default=90, ge=1, le=365)
 
@@ -180,6 +181,31 @@ async def create_tenant_endpoint(request: TenantCreateRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/tenants")
+async def list_tenants_endpoint():
+    """
+    List all tenant organizations.
+
+    Used by MVP onboarding flow to discover tenant IDs after creation.
+    """
+    tenants = list_tenants()
+
+    return {
+        "tenant_count": len(tenants),
+        "tenants": [
+            {
+                "tenant_id": tenant["tenant_id"],
+                "org_name": tenant["org_name"],
+                "domain": tenant["domain"],
+                "status": tenant["status"],
+                "support_tier": tenant["support_tier"],
+                "created_at": tenant["created_at"]
+            }
+            for tenant in tenants
+        ]
+    }
+
+
 @router.get("/tenants/{tenant_id}")
 async def get_tenant_endpoint(
     tenant_id: str,
@@ -205,13 +231,13 @@ async def get_tenant_endpoint(
 async def create_user_endpoint(
     tenant_id: str,
     request: UserCreateRequest,
-    current_tenant: str = Depends(get_current_tenant),
-    _: bool = Depends(require_permission("manage_users"))
+    authorization: Optional[str] = Header(None)
 ):
     """
     Add a user to the tenant with role-based access.
     
-    Requires: admin or risk-officer role
+    Bootstrap mode: First user creation does not require authentication.
+    Subsequent users: Requires admin or risk-officer role.
     
     Roles:
     - admin: Full access (users, configs, audits)
@@ -219,8 +245,44 @@ async def create_user_endpoint(
     - analyst: Can validate and view results
     - viewer: Read-only access to audit trail
     """
-    if tenant_id != current_tenant:
-        raise HTTPException(status_code=403, detail="Cannot manage other tenants")
+    existing_users = list_tenant_users(tenant_id)
+    is_bootstrap = len(existing_users) == 0
+    
+    if is_bootstrap:
+        logger.info(f"Bootstrap mode: Creating first user for tenant {tenant_id}")
+        if request.role != "admin":
+            raise HTTPException(
+                status_code=400, 
+                detail="First user must have admin role (bootstrap)"
+            )
+    else:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=401,
+                detail="Missing or invalid Authorization header"
+            )
+        
+        api_key = authorization.replace("Bearer ", "")
+        key_metadata = validate_api_key(api_key)
+        if not key_metadata:
+            raise HTTPException(status_code=401, detail="Invalid or expired API key")
+        
+        if tenant_id != key_metadata["tenant_id"]:
+            raise HTTPException(status_code=403, detail="Cannot manage other tenants")
+        
+        allowed_scopes = _ACTION_SCOPES.get("manage_users", set())
+        if key_metadata["scope"] not in allowed_scopes:
+            raise HTTPException(status_code=403, detail="API key scope not permitted")
+        
+        user_check = get_user(key_metadata["user_id"])
+        if not user_check:
+            raise HTTPException(status_code=403, detail="User not found")
+        
+        if not has_permission(key_metadata["user_id"], "manage_users", "all"):
+            raise HTTPException(
+                status_code=403,
+                detail="Insufficient permissions for action: manage_users"
+            )
     
     try:
         user = create_user(
@@ -228,7 +290,7 @@ async def create_user_endpoint(
             email=request.email,
             role=request.role,
             mfa_enabled=request.mfa_enabled,
-            actor_id=None  # In real implementation, extract from token
+            actor_id=None
         )
         
         return {
@@ -314,9 +376,7 @@ async def change_user_role_endpoint(
 async def create_api_key_endpoint(
     tenant_id: str,
     request: APIKeyCreateRequest,
-    current_tenant: str = Depends(get_current_tenant),
-    key_metadata: Dict[str, Any] = Depends(get_current_key_metadata),
-    _: bool = Depends(require_permission("manage_config"))
+    authorization: Optional[str] = Header(None)
 ):
     """
     Generate a new API key.
@@ -329,11 +389,57 @@ async def create_api_key_endpoint(
     - admin: Full API access
     - read-metrics: Read-only access to audit logs and health metrics
     """
-    if tenant_id != current_tenant:
-        raise HTTPException(status_code=403, detail="Cannot create keys for other tenants")
-    
     try:
-        user_id = key_metadata["user_id"]
+        existing_keys = list_api_keys(tenant_id)
+        is_bootstrap = len(existing_keys) == 0
+
+        if is_bootstrap:
+            if not request.user_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Bootstrap mode requires user_id for first API key"
+                )
+
+            bootstrap_user = get_user(request.user_id)
+            if not bootstrap_user:
+                raise HTTPException(status_code=404, detail="User not found")
+            if bootstrap_user.get("tenant_id") != tenant_id:
+                raise HTTPException(status_code=403, detail="User does not belong to tenant")
+            if bootstrap_user.get("role") != Role.ADMIN.value:
+                raise HTTPException(
+                    status_code=403,
+                    detail="First API key can only be created for admin user"
+                )
+
+            user_id = request.user_id
+            logger.info(f"Bootstrap mode: Creating first API key for tenant {tenant_id}")
+        else:
+            if not authorization or not authorization.startswith("Bearer "):
+                raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+
+            api_key = authorization.replace("Bearer ", "")
+            key_metadata = validate_api_key(api_key)
+            if not key_metadata:
+                raise HTTPException(status_code=401, detail="Invalid or expired API key")
+
+            if tenant_id != key_metadata["tenant_id"]:
+                raise HTTPException(status_code=403, detail="Cannot create keys for other tenants")
+
+            allowed_scopes = _ACTION_SCOPES.get("manage_config", set())
+            if key_metadata["scope"] not in allowed_scopes:
+                raise HTTPException(status_code=403, detail="API key scope not permitted")
+
+            user_check = get_user(key_metadata["user_id"])
+            if not user_check:
+                raise HTTPException(status_code=403, detail="User not found")
+
+            if not has_permission(key_metadata["user_id"], "manage_config", "all"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Insufficient permissions for action: manage_config"
+                )
+
+            user_id = key_metadata["user_id"]
         
         key = generate_api_key(
             tenant_id=tenant_id,

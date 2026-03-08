@@ -22,7 +22,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
-  "httpx>=0.27"
+  "httpx>=0.27",
+  "locust>=2.29"
 ]
 test-llm = [
   "openai>=1.3"

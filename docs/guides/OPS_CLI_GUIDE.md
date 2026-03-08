@@ -9,7 +9,7 @@
 
 ## OVERVIEW
 
-All operational tasks are performed via `make` commands that invoke the backend REST API (`app/routes/ops.py`). This eliminates browser-based dashboards while preserving 100% of operational functionality.
+All operational tasks are performed via `make` commands that invoke backend REST API routes exposed by `../../app/main.py` and `../../app/routes/onboarding.py`.
 
 **Architecture:**
 - **Backend:** FastAPI `/ops/*` routes with RBAC
@@ -444,17 +444,17 @@ make user-modify USER=your-uuid ROLE=ops-approver
 ```bash
 # Daily operations
 make health-check           # System status
-make test-quick             # Pre-commit validation
-make deploy-status          # Current deployment
-make incidents-list         # Active incidents
+make test                   # Unit tests
+make test-integration       # Integration tests
+make tenant-list            # List tenants
 
 # Emergency
-make deploy-rollback REASON="Critical bug"
-make incident-rewind ID=uuid REASON="Regression"
+make server-stop            # Stop backend server
+make reset-db               # Reset local databases
 
 # Weekly tasks
-make test-full              # Pre-deployment validation
-make audit-trail DAYS=7     # Compliance review
+make test-all               # Full validation suite
+make audit-trail TENANT=<id> API_KEY=<key>
 ```
 
 ### Environment Setup (One-Time)
@@ -482,17 +482,17 @@ make          # Same as make help
 1. **Configure environment:** Set `ORIPHIM_*` variables
 2. **Start backend:** `uvicorn app.main:app --reload`
 3. **Verify setup:** `make health-check`
-4. **Run first test:** `make test-quick`
+4. **Run first test:** `make test`
 5. **Explore commands:** `make help`
 
 For backend API details, see:
 - API docs: http://localhost:8000/docs
-- Source: [app/routes/ops.py](app/routes/ops.py)
-- Models: [app/models_ops.py](app/models_ops.py)
+- Source: [app/routes/onboarding.py](../../app/routes/onboarding.py)
+- Models: [app/models.py](../../app/models.py)
 
 ---
 
 **Document Version:** 1.0  
 **Last Updated:** March 1, 2026  
 **Maintainer:** Founder/CTO  
-**Related:** [OPS_UI_PIVOT_PLAN.md](OPS_UI_PIVOT_PLAN.md)
+**Related:** [REPO_ORGANIZATION.md](../architecture/REPO_ORGANIZATION.md)

@@ -17,9 +17,9 @@ Project documentation has been reorganized under [docs/README.md](docs/README.md
 - 10-phase roadmap to enterprise SaaS compliance
 
 📖 **Start Here:**
-- [Onboarding Architecture](ONBOARDING_SYSTEM.md) - Complete 1000-line spec (all 10 phases)
-- [Implementation Checklist](ONBOARDING_CHECKLIST.md) - Phase-by-phase roadmap
-- [Quick Reference](ONBOARDING_QUICK_REF.md) - Developer API guide
+- [Onboarding Architecture](docs/guides/ONBOARDING_COMPLETE.md) - Multi-tenant onboarding reference
+- [Implementation Checklist](docs/guides/PHASE1_IMPLEMENTATION.md) - Phase-by-phase delivery map
+- [Quick Reference](docs/guides/QUICKSTART_PHASE1.md) - Developer quickstart
 
 **5-Minute Integration:**
 ```python
@@ -44,12 +44,12 @@ print(key["api_key"])
 Want to see Oriphim in action? Check out the **Hallucination Trap Demo**:
 
 ```bash
-python demo/run_demo.py
+python scripts/setup/bootstrap_demo.py
 ```
 
 This demo shows **unprotected AI (catastrophic loss) vs. Oriphim-protected AI (deterministic safety)** in parallel terminals. Perfect for investor/board presentations.
 
-📖 [Full Demo Guide](demo/QUICKSTART.md)
+📖 [Full Demo Guide](docs/guides/QUICKSTART_TESTING_CLIENT.md)
 
 ---
 
@@ -113,7 +113,7 @@ API will be available at `http://localhost:8000`
 - `POST /v1/onboarding/tenants/{tenant_id}/users` - Add user
 - `POST /v1/onboarding/tenants/{tenant_id}/api-keys` - Generate API key
 - `GET /v1/onboarding/tenants/{tenant_id}/audit-log` - View audit trail
-- [Full endpoint reference](ONBOARDING_QUICK_REF.md)
+- [Full endpoint reference](docs/guides/QUICKSTART_PHASE1.md)
 
 ### v1: Legacy Validation
 - `POST /v1/validate` - Basic constraint + entropy validation
@@ -425,7 +425,7 @@ Located in `rust-future/` directory. **NOT integrated into current code. Zero im
 
 When to build: Only if production data shows customers need <50ms P99 latency.
 
-See [rust-future/README.md](rust-future/README.md) for details.
+See this section for optimization decision criteria and rollout guidance.
 
 ## Rust Optimization (Optional)
 
@@ -433,7 +433,7 @@ See [rust-future/README.md](rust-future/README.md) for details.
 
 The Python implementation is **100% complete and production-ready**. It passes all tests and meets the Feb 22, 2026 launch deadline.
 
-Rust optimization code is scaffolded in the `rust-future/` directory but is **completely isolated** from the running system.
+Rust optimization is an optional future path and is **not required** for the running system.
 
 ### Why Rust Exists
 
@@ -456,9 +456,9 @@ Rust optimization code is scaffolded in the `rust-future/` directory but is **co
 ### What to Do With Rust Code
 
 **Do this:**
-1. Read [rust-future/README.md](rust-future/README.md) for orientation
-2. Read [rust-future/OVERVIEW.md](rust-future/OVERVIEW.md) for strategy
-3. Keep it in version control (it's ready to build when needed)
+1. Benchmark current Python latency under your production traffic profile
+2. Prioritize only modules that violate SLOs
+3. Implement compiled optimizations only after metrics justify complexity
 
 **Don't do this:**
 - Don't integrate Rust now (Python works fine)
@@ -467,16 +467,9 @@ Rust optimization code is scaffolded in the `rust-future/` directory but is **co
 
 ### How to Build It Later
 
-When (if) you're ready:
+When latency SLOs are violated, create a dedicated optimization module and integrate behind a feature flag.
 
-```bash
-cd rust-future/
-# See IMPLEMENTATION.md for step-by-step build instructions
-```
-
-**Build time:** 4-7 minutes first time, 1-2 minutes for rebuilds
-
-**Impact on existing code:** Zero. Rust modules are completely optional and won't be called unless you integrate them (you won't, unless you choose to).
+**Impact on existing code:** Zero if introduced behind explicit runtime toggles.
 
 ## Operations Interface
 
@@ -485,9 +478,9 @@ All operational tasks (testing, deployment, incident response, monitoring) are p
 **Quick Reference:**
 ```bash
 make health-check        # System status
-make test-quick          # Run Tier 1-2 tests
-make deploy-canary       # Start canary deployment
-make incidents-list      # View active incidents
+make test                # Run unit tests
+make test-integration    # Run integration tests
+make test-all            # Run full suite with coverage
 ```
 
 **Complete Documentation:** See [docs/guides/OPS_CLI_GUIDE.md](docs/guides/OPS_CLI_GUIDE.md) for comprehensive reference including:

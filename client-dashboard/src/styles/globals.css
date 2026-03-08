@@ -1,0 +1,188 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --floral-white: #F8FAFC;
+  --carbon-black: #0F172A;
+  --blood-red: #DC2626;
+  --deep-crimson: #B91C1C;
+  --space-indigo: #4F46E5;
+  --charcoal-brown: #475569;
+  
+  --brand-primary: #4F46E5;
+  --brand-primary-hover: #4338CA;
+  --gray-50: #F8FAFC;
+  --gray-100: #F1F5F9;
+  --gray-200: #E2E8F0;
+  --gray-600: #475569;
+  --gray-900: #0F172A;
+  
+  --success: #10B981;
+  --success-bg: #ECFDF5;
+  --warning: #F59E0B;
+  --warning-bg: #FFFBEB;
+  --danger: #DC2626;
+  --danger-bg: #FEF2F2;
+  --info: #06B6D4;
+  --info-bg: #ECFEFF;
+}
+
+html,
+body {
+  background-color: var(--gray-50);
+  color: var(--gray-900);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.status-green {
+  @apply text-success-700 bg-success-50 border-success-200;
+}
+
+.status-yellow {
+  @apply text-warning-700 bg-warning-50 border-warning-300;
+}
+
+.status-red {
+  @apply text-danger-700 bg-danger-50 border-danger-200;
+}
+
+.btn-primary {
+  @apply bg-brand-600 hover:bg-brand-700 text-white font-medium transition-colors duration-150 shadow-sm;
+}
+
+.btn-secondary {
+  @apply border border-slate-300 hover:bg-slate-50 text-slate-700 font-medium transition-colors duration-150;
+}
+
+.card {
+  @apply bg-white border border-slate-200 rounded-lg p-6 shadow-sm;
+}
+
+.badge-allow {
+  @apply bg-success-100 text-success-800 px-3 py-1 rounded-md text-sm font-medium;
+}
+
+.badge-review {
+  @apply bg-warning-100 text-warning-800 px-3 py-1 rounded-md text-sm font-medium;
+}
+
+.badge-block {
+  @apply bg-danger-100 text-danger-700 px-3 py-1 rounded-md text-sm font-medium;
+}
+
+/* ORIPHIM color system utility classes */
+
+.indicator-operational {
+  @apply bg-success-500 rounded-full;
+}
+
+.indicator-degraded {
+  @apply bg-warning-500 rounded-full;
+}
+
+.indicator-critical {
+  @apply bg-danger-500 rounded-full;
+}
+
+.indicator-unknown {
+  @apply bg-slate-400 rounded-full;
+}
+
+.metric-card-success {
+  @apply border-l-4 border-success-500 bg-white;
+}
+
+.metric-card-warning {
+  @apply border-l-4 border-warning-500 bg-white;
+}
+
+.metric-card-danger {
+  @apply border-l-4 border-danger-500 bg-white;
+}
+
+.metric-card-info {
+  @apply border-l-4 border-info-500 bg-white;
+}
+
+.validation-pass {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-success-100 text-success-800;
+}
+
+.validation-fail {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-danger-100 text-danger-800;
+}
+
+.validation-pending {
+  @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-warning-100 text-warning-800;
+}
+
+.severity-critical {
+  @apply text-danger-700 bg-danger-50 border border-danger-200;
+}
+
+.severity-high {
+  @apply text-warning-700 bg-warning-50 border border-warning-200;
+}
+
+.severity-medium {
+  @apply text-info-700 bg-info-50 border border-info-200;
+}
+
+.severity-low {
+  @apply text-slate-700 bg-slate-50 border border-slate-200;
+}
+
+.link-primary {
+  @apply text-brand-600 hover:text-brand-700 font-medium underline-offset-2 hover:underline;
+}
+
+.link-subtle {
+  @apply text-slate-600 hover:text-slate-900 transition-colors;
+}
+
+.input-field {
+  @apply block w-full rounded-md border-slate-300 shadow-sm focus:border-brand-500 focus:ring-brand-500 sm:text-sm;
+}
+
+.select-field {
+  @apply block w-full rounded-md border-slate-300 shadow-sm focus:border-brand-500 focus:ring-brand-500 sm:text-sm;
+}
+
+.alert-success {
+  @apply bg-success-50 border-l-4 border-success-400 p-4;
+}
+
+.alert-warning {
+  @apply bg-warning-50 border-l-4 border-warning-400 p-4;
+}
+
+.alert-danger {
+  @apply bg-danger-50 border-l-4 border-danger-400 p-4;
+}
+
+.alert-info {
+  @apply bg-info-50 border-l-4 border-info-400 p-4;
+}
+
+.table-header {
+  @apply bg-slate-50 text-left text-xs font-semibold text-slate-700 uppercase tracking-wider;
+}
+
+.table-row {
+  @apply border-b border-slate-200 hover:bg-slate-50 transition-colors;
+}
+
+.table-cell {
+  @apply px-6 py-4 whitespace-nowrap text-sm text-slate-900;
+}
+
+.code-block {
+  @apply bg-slate-900 text-slate-50 rounded-lg p-4 font-mono text-sm overflow-x-auto;
+}
+
+.code-inline {
+  @apply bg-slate-100 text-danger-600 px-1.5 py-0.5 rounded font-mono text-sm;
+}

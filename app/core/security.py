@@ -57,14 +57,18 @@ def validate_security_config() -> None:
     """
     missing = []
     
-    if not JWT_SECRET_KEY:
+    # Read from os.environ directly (not module-level cache) so tests can override
+    jwt_secret = os.getenv("JWT_SECRET_KEY")
+    db_encryption_key = os.getenv("DATABASE_ENCRYPTION_KEY")
+    
+    if not jwt_secret:
         missing.append("JWT_SECRET_KEY")
-    elif len(JWT_SECRET_KEY) < 32:
+    elif len(jwt_secret) < 32:
         raise SecurityConfigError("JWT_SECRET_KEY must be at least 32 characters")
     
-    if not DATABASE_ENCRYPTION_KEY:
+    if not db_encryption_key:
         missing.append("DATABASE_ENCRYPTION_KEY")
-    elif len(DATABASE_ENCRYPTION_KEY) != 64:
+    elif len(db_encryption_key) != 64:
         raise SecurityConfigError("DATABASE_ENCRYPTION_KEY must be 64 hex characters")
     
     if missing:
@@ -117,11 +121,15 @@ def create_access_token(
     Returns:
         Signed JWT token
     """
-    if not JWT_SECRET_KEY:
+    secret = os.getenv("JWT_SECRET_KEY") or JWT_SECRET_KEY
+    algorithm = os.getenv("JWT_ALGORITHM", JWT_ALGORITHM)
+    expires_minutes = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", str(JWT_ACCESS_TOKEN_EXPIRE_MINUTES)))
+
+    if not secret:
         raise SecurityConfigError("JWT_SECRET_KEY not configured")
     
     now = datetime.utcnow()
-    expires = now + timedelta(minutes=JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
+    expires = now + timedelta(minutes=expires_minutes)
     
     claims = {
         "sub": subject,
@@ -137,7 +145,7 @@ def create_access_token(
     if additional_claims:
         claims.update(additional_claims)
     
-    token = jwt.encode(claims, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    token = jwt.encode(claims, secret, algorithm=algorithm)
     return token
 
 
@@ -157,11 +165,15 @@ def create_refresh_token(
     Returns:
         Signed JWT refresh token
     """
-    if not JWT_SECRET_KEY:
+    secret = os.getenv("JWT_SECRET_KEY") or JWT_SECRET_KEY
+    algorithm = os.getenv("JWT_ALGORITHM", JWT_ALGORITHM)
+    expires_days = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", str(JWT_REFRESH_TOKEN_EXPIRE_DAYS)))
+
+    if not secret:
         raise SecurityConfigError("JWT_SECRET_KEY not configured")
     
     now = datetime.utcnow()
-    expires = now + timedelta(days=JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+    expires = now + timedelta(days=expires_days)
     
     claims = {
         "sub": subject,
@@ -173,7 +185,7 @@ def create_refresh_token(
         "jti": secrets.token_urlsafe(16),
     }
     
-    token = jwt.encode(claims, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    token = jwt.encode(claims, secret, algorithm=algorithm)
     return token
 
 
@@ -192,19 +204,33 @@ def verify_token(token: str, expected_type: str = "access") -> Dict[str, Any]:
         jwt.ExpiredSignatureError: If token expired
         jwt.InvalidTokenError: If token invalid or blacklisted
     """
-    if not JWT_SECRET_KEY:
+    # Read from os.environ directly (tests may override)
+    secret = os.getenv("JWT_SECRET_KEY") or JWT_SECRET_KEY
+    algo = os.getenv("JWT_ALGORITHM", "HS256")
+    
+    if not secret:
         raise SecurityConfigError("JWT_SECRET_KEY not configured")
     
     # Decode and verify signature
-    # leeway=10 handles clock skew between systems
-    # verify_iat=False needed in WSL/Docker environments with clock drift
-    claims = jwt.decode(
-        token, 
-        JWT_SECRET_KEY, 
-        algorithms=[JWT_ALGORITHM],
-        leeway=10,
-        options={"verify_iat": False}
-    )
+    # Decode and verify signature
+    # Note: We don't use leeway for expiration checking to ensure expired tokens are rejected
+    # verify_iat=False disables "issued at" validation which can fail with test/WSL clock drift
+    try:
+        claims = jwt.decode(
+            token, 
+            secret, 
+            algorithms=[algo],
+            options={"verify_iat": False, "verify_exp": True}
+        )
+    except jwt.ImmatureSignatureError:
+        # Token's iat is in future due to clock skew, but exp is still valid if not too far in past
+        claims = jwt.decode(
+            token,
+            secret,
+            algorithms=[algo],
+            leeway=5,
+            options={"verify_iat": False, "verify_exp": True}
+        )
     
     # Verify token type
     if claims.get("type") != expected_type:
@@ -391,8 +417,11 @@ class SessionManager:
                 if v["user_id"] == user_id and v["tenant_id"] == tenant_id
             }
             
+            # Read limit from os.environ (tests may override)
+            max_concurrent = int(os.getenv("MAX_CONCURRENT_SESSIONS_PER_USER", "3"))
+            
             # Enforce concurrent session limit
-            if len(user_sessions) >= MAX_CONCURRENT_SESSIONS:
+            if len(user_sessions) >= max_concurrent:
                 # Remove oldest session
                 oldest_jti = min(
                     user_sessions.keys(),
@@ -436,7 +465,9 @@ class SessionManager:
                 return False
             
             session = self._sessions[jti]
-            timeout = timedelta(minutes=SESSION_TIMEOUT_MINUTES)
+            # Read timeout from os.environ (tests may override)
+            timeout_minutes = int(os.getenv("SESSION_TIMEOUT_MINUTES", "30"))
+            timeout = timedelta(minutes=timeout_minutes)
             
             if datetime.utcnow() - session["last_activity"] > timeout:
                 # Session timed out

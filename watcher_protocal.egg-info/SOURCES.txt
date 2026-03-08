@@ -3,7 +3,7 @@ pyproject.toml
 app/__init__.py
 app/main.py
 app/models.py
-app/models_dashboard.py
+app/models_health.py
 app/core/__init__.py
 app/core/compliance.py
 app/core/confidence.py
@@ -14,13 +14,16 @@ app/core/onboarding.py
 app/core/parallel_validation.py
 app/core/pdf_export.py
 app/core/physical_validator.py
+app/core/security.py
 app/core/severity.py
 app/core/storage.py
 app/core/wrapper.py
 app/routes/__init__.py
 app/routes/onboarding.py
 tests/__init__.py
+tests/conftest.py
 tests/test_hallucination_traps.py
+tests/test_security_phase1.py
 watcher_protocal.egg-info/PKG-INFO
 watcher_protocal.egg-info/SOURCES.txt
 watcher_protocal.egg-info/dependency_links.txt

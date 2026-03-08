@@ -32,10 +32,26 @@ except ImportError:
     sqlcipher = None
     ENCRYPTION_AVAILABLE = False
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not required if env vars set via system
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / ".watcher_demo.db"
-DB_PATH = Path(os.getenv("SQLITE_DB_PATH", str(_DEFAULT_DB_PATH))).expanduser().resolve()
+
+
+def _get_db_path() -> str:
+    """Resolve database path from environment at runtime.
+
+    This avoids import-time path caching during tests where env vars may change.
+    """
+    raw_path = os.getenv("SQLITE_DB_PATH", str(_DEFAULT_DB_PATH))
+    if raw_path == ":memory:":
+        return raw_path
+    return Path(raw_path).expanduser().resolve().as_posix()
 _LOCK = threading.Lock()
 
 
@@ -68,29 +84,44 @@ class APIKeyScope(str, Enum):
     READ_METRICS = "read-metrics"  # Read-only audit trail + health
 
 
+def _get_encryption_key() -> Optional[str]:
+    """Get database encryption key from environment."""
+    key = os.getenv("DATABASE_ENCRYPTION_KEY")
+    if key and len(key) == 64:
+        return f'"x\'{key}\'"'
+    return None
+
+
 def _connect() -> sqlite3.Connection:
     """
     Get database connection with row factory and optional encryption.
     
     Uses same encryption logic as storage.py for consistency.
     """
-    encryption_key = os.getenv("DATABASE_ENCRYPTION_KEY")
+    encryption_key = _get_encryption_key()
+    db_path = _get_db_path()
     
-    if encryption_key and len(encryption_key) == 64 and ENCRYPTION_AVAILABLE:
-        # Use SQLCipher for encryption at rest
-        conn = sqlcipher.connect(DB_PATH.as_posix(), check_same_thread=False)
-        conn.execute(f"PRAGMA key = x'{encryption_key}'")
-        conn.execute("PRAGMA cipher_page_size = 4096")
-        conn.execute("PRAGMA kdf_iter = 256000")
-        conn.row_factory = sqlite3.Row
-        return conn
+    if encryption_key and ENCRYPTION_AVAILABLE:
+        try:
+            conn = sqlcipher.connect(db_path, check_same_thread=False)
+            conn.execute(f"PRAGMA key = {encryption_key}")
+            conn.execute("PRAGMA cipher_page_size = 4096")
+            conn.execute("PRAGMA kdf_iter = 256000")
+            conn.execute("SELECT 1")
+            conn.row_factory = sqlcipher.Row
+            return conn
+        except Exception:
+            logger.warning(
+                "SQLCipher connection failed for DB path '%s'. Falling back to standard SQLite.",
+                db_path,
+            )
     else:
         if encryption_key and not ENCRYPTION_AVAILABLE:
             logger.warning(
                 "DATABASE_ENCRYPTION_KEY set but sqlcipher3 not available. "
                 "Using UNENCRYPTED database."
             )
-        conn = sqlite3.connect(DB_PATH.as_posix(), check_same_thread=False)
+        conn = sqlite3.connect(db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         return conn
 

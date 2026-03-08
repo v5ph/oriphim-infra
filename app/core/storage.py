@@ -16,8 +16,24 @@ except ImportError:
     sqlcipher = None
     ENCRYPTION_AVAILABLE = False
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # dotenv not required if env vars set via system
+
 _DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / ".watcher_demo.db"
-DB_PATH = Path(os.getenv("SQLITE_DB_PATH", str(_DEFAULT_DB_PATH))).expanduser().resolve()
+
+
+def _get_db_path() -> str:
+    """Resolve database path from environment at runtime.
+
+    This avoids import-time path caching during tests where env vars may change.
+    """
+    raw_path = os.getenv("SQLITE_DB_PATH", str(_DEFAULT_DB_PATH))
+    if raw_path == ":memory:":
+        return raw_path
+    return Path(raw_path).expanduser().resolve().as_posix()
 
 _LOCK = threading.Lock()
 _SNAPSHOT_MEMOIZER: Dict[str, Dict[str, Any]] = {}  # agent_id -> latest valid snapshot (hot cache)
@@ -27,7 +43,7 @@ def _get_encryption_key() -> Optional[str]:
     """Get database encryption key from environment."""
     key = os.getenv("DATABASE_ENCRYPTION_KEY")
     if key and len(key) == 64:
-        return f"x'{key}'"
+        return f'"x\'{key}\'"'
     return None
 
 
@@ -39,32 +55,51 @@ def _connect() -> sqlite3.Connection:
     Otherwise falls back to standard SQLite (logs warning).
     """
     encryption_key = _get_encryption_key()
+    db_path = _get_db_path()
     
     if encryption_key and ENCRYPTION_AVAILABLE:
-        # Use SQLCipher for encryption at rest
-        conn = sqlcipher.connect(DB_PATH.as_posix(), check_same_thread=False)
-        conn.execute(f"PRAGMA key = {encryption_key}")
-        conn.execute("PRAGMA cipher_page_size = 4096")
-        conn.execute("PRAGMA kdf_iter = 256000")  # PBKDF2 iterations
-        conn.row_factory = sqlite3.Row
-        return conn
-    else:
-        # Fallback to standard SQLite
-        if encryption_key and not ENCRYPTION_AVAILABLE:
+        try:
+            conn = sqlcipher.connect(db_path, check_same_thread=False)
+            conn.execute(f"PRAGMA key = {encryption_key}")
+            conn.execute("PRAGMA cipher_page_size = 4096")
+            conn.execute("PRAGMA kdf_iter = 256000")  # PBKDF2 iterations
+            conn.execute("SELECT 1")
+            conn.row_factory = sqlcipher.Row
+            return conn
+        except Exception as e:
             import logging
             logging.warning(
-                "DATABASE_ENCRYPTION_KEY set but sqlcipher3 not available. "
-                "Install with: pip install sqlcipher3. "
-                "Using UNENCRYPTED database."
+                "SQLCipher connection failed for DB path '%s' (error: %s). "
+                "Falling back to standard SQLite. "
+                "If encryption is required, delete the DB and regenerate .env keys.",
+                db_path,
+                str(e)
             )
-        conn = sqlite3.connect(DB_PATH.as_posix(), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+            # Fall through to standard SQLite
+    
+    # Standard SQLite fallback
+    if encryption_key and not ENCRYPTION_AVAILABLE:
+        import logging
+        logging.warning(
+            "DATABASE_ENCRYPTION_KEY set but sqlcipher3 not available. "
+            "Install with: pip install sqlcipher3. "
+            "Using UNENCRYPTED database."
+        )
+    
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 def init_db() -> None:
     with _LOCK:
         conn = _connect()
+        if conn is None:
+            raise RuntimeError(
+                "Database connection failed. Check DATABASE_ENCRYPTION_KEY in .env "
+                "or delete .watcher_demo.db and regenerate keys with: "
+                "python scripts/setup/generate_env.py --force"
+            )
         cur = conn.cursor()
         cur.execute(
             """
@@ -328,6 +363,8 @@ def list_audit_events(agent_id: Optional[str] = None) -> List[Dict[str, Any]]:
                 "violations": json.loads(row["violations_json"]),
                 "regulatory_articles": json.loads(row["regulatory_articles_json"]),
                 "message": row["message"],
+                "prev_hash": row["prev_hash"],
+                "chain_hash": row["event_hash"],
                 "created_at": row["created_at"],
             }
             for row in rows

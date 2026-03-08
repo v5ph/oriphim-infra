@@ -13,7 +13,7 @@ import pytest
 import os
 import tempfile
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Set test environment before importing modules
 os.environ["DATABASE_ENCRYPTION_KEY"] = "0" * 64  # Test key
@@ -75,16 +75,16 @@ class TestJWTTokens:
         """Test that expired tokens are rejected."""
         import jwt
         
-        # Create token with immediate expiration
-        now = datetime.utcnow()
+        # Create token with immediate expiration (timezone-aware to avoid local timestamp skew)
+        now = datetime.now(timezone.utc)
         past = now - timedelta(hours=1)
         
         token = jwt.encode(
             {
                 "sub": "user-123",
                 "type": "access",
-                "exp": past.timestamp(),
-                "iat": past.timestamp()
+                "exp": int(past.timestamp()),
+                "iat": int(past.timestamp())
             },
             os.environ["JWT_SECRET_KEY"],
             algorithm="HS256"

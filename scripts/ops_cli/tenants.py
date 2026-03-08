@@ -17,7 +17,7 @@ def create_tenant(name: str, domain: str, tier: str = "standard", api_key: Optio
             headers["Authorization"] = f"Bearer {api_key}"
         
         payload = {
-            "tenant_name": name,
+            "org_name": name,
             "domain": domain,
             "support_tier": tier
         }

@@ -203,7 +203,7 @@ STEP 4: Incident Recovery (if needed)
 
 ### Root Level Configuration
 
-#### [pyproject.toml](pyproject.toml)
+#### [pyproject.toml](../../pyproject.toml)
 **Purpose:** Package definition, dependency versions, build config
 
 **Key Sections:**
@@ -217,10 +217,10 @@ STEP 4: Incident Recovery (if needed)
 
 ### Application Layer
 
-#### [app/__init__.py](app/__init__.py)
+#### [app/__init__.py](../../app/__init__.py)
 **Purpose:** Package marker (empty)
 
-#### [app/main.py](app/main.py) - **CRITICAL**
+#### [app/main.py](../../app/main.py) - **CRITICAL**
 **Purpose:** FastAPI application definition + 7 REST API endpoints
 
 **Endpoints Implemented:**
@@ -264,7 +264,7 @@ STEP 4: Incident Recovery (if needed)
 
 ---
 
-#### [app/models.py](app/models.py)
+#### [app/models.py](../../app/models.py)
 **Purpose:** Pydantic request/response schemas (input validation)
 
 **Request Models:**
@@ -313,7 +313,7 @@ ParallelValidationStatus (modern):
 
 ---
 
-#### [app/models_health.py](app/models_health.py)
+#### [app/models_health.py](../../app/models_health.py)
 **Purpose:** Health and validation metrics data models
 
 **Key Classes:**
@@ -347,7 +347,7 @@ DriftMetrics:
 
 ### Core Validation Pipeline
 
-#### [app/core/entropy.py](app/core/entropy.py)
+#### [app/core/entropy.py](../../app/core/entropy.py)
 **Purpose:** Measure hallucination divergence between LLM responses
 
 **Key Functions:**
@@ -383,7 +383,7 @@ hallucination_divergence(responses: List[str]) -> float:
 
 ---
 
-#### [app/core/constraints.py](app/core/constraints.py)
+#### [app/core/constraints.py](../../app/core/constraints.py)
 **Purpose:** Check hard business logic + physics constraints
 
 **Key Function:**
@@ -426,7 +426,7 @@ return violations
 
 ---
 
-#### [app/core/confidence.py](app/core/confidence.py)
+#### [app/core/confidence.py](../../app/core/confidence.py)
 **Purpose:** Convert divergence + violations into a confidence score (0-1)
 
 **Algorithm:**
@@ -454,7 +454,7 @@ calculate_confidence(divergence: float, violations: List[str]) -> ConfidenceScor
 
 ---
 
-#### [app/core/severity.py](app/core/severity.py)
+#### [app/core/severity.py](../../app/core/severity.py)
 **Purpose:** Quantify financial impact of each violation
 
 **Key Functions:**
@@ -486,7 +486,7 @@ calculate_overall_severity_score(details: List[SeverityScore]) -> float:
 
 ---
 
-#### [app/core/drift.py](app/core/drift.py)
+#### [app/core/drift.py](../../app/core/drift.py)
 **Purpose:** Detect if agent behavior is degrading over time (model drift)
 
 **Key Concepts:**
@@ -520,7 +520,7 @@ CRO sees: "System drift detected. Agent model may need retraining."
 
 ---
 
-#### [app/core/parallel_validation.py](app/core/parallel_validation.py) - **CRITICAL**
+#### [app/core/parallel_validation.py](../../app/core/parallel_validation.py) - **CRITICAL**
 **Purpose:** Orchestrate full validation pipeline (entropy, constraints, confidence, severity, drift)
 
 **Main Function:**
@@ -586,7 +586,7 @@ If validation exceeds 200ms (LATENCY_GUARD_SECONDS):
 
 ---
 
-#### [app/core/compliance.py](app/core/compliance.py)
+#### [app/core/compliance.py](../../app/core/compliance.py)
 **Purpose:** Map violations to regulatory articles + export framework
 
 **Key Functions:**
@@ -608,7 +608,7 @@ map_violations_to_articles(violations: List[str]) -> Dict[str, str]:
 
 ---
 
-#### [app/core/security.py](app/core/security.py)
+#### [app/core/security.py](../../app/core/security.py)
 **Purpose:** HTTP security headers + HTTPS enforcement
 
 **Functions:**
@@ -630,7 +630,7 @@ get_security_headers() -> Dict[str, str]:
 
 ---
 
-#### [app/core/storage.py](app/core/storage.py)
+#### [app/core/storage.py](../../app/core/storage.py)
 **Purpose:** SQLite database + optional SQLCipher encryption
 
 **Database Schema:**
@@ -691,7 +691,7 @@ list_audit_events(agent_id, limit) -> List[Dict]:
 
 ---
 
-#### [app/core/pdf_export.py](app/core/pdf_export.py)
+#### [app/core/pdf_export.py](../../app/core/pdf_export.py)
 **Purpose:** Generate compliance-ready audit PDF reports
 
 **Function:**
@@ -714,7 +714,7 @@ generate_audit_pdf(agent_id: str, export_id: str, violations: List[str]) -> str:
 
 ---
 
-#### [app/core/physical_validator.py](app/core/physical_validator.py)
+#### [app/core/physical_validator.py](../../app/core/physical_validator.py)
 **Purpose:** Custom metric validation (extensible framework)
 
 **Pattern:**
@@ -738,7 +738,7 @@ class PhysicalValidator:
 
 ---
 
-#### [app/core/wrapper.py](app/core/wrapper.py)
+#### [app/core/wrapper.py](../../app/core/wrapper.py)
 **Purpose:** Decorator for wrapping agent functions with validation
 
 **Example:**
@@ -762,7 +762,7 @@ def my_trading_agent(params):
 
 ### Onboarding / Multi-Tenancy
 
-#### [app/routes/onboarding.py](app/routes/onboarding.py)
+#### [app/routes/onboarding.py](../../app/routes/onboarding.py)
 **Purpose:** REST API for tenant provisioning, user management, API keys
 
 **Endpoints:**
@@ -792,7 +792,7 @@ VERIFICATION: Compare request API-Key header against bcrypt hash
 
 ---
 
-#### [app/core/onboarding.py](app/core/onboarding.py)
+#### [app/core/onboarding.py](../../app/core/onboarding.py)
 **Purpose:** Tenant + user database schema + provisioning logic
 
 **Key Functions:**
@@ -817,7 +817,7 @@ list_users(tenant_id) -> List[Dict]:
 
 ### Demo / Testing
 
-#### [demo/run_demo.py](demo/run_demo.py)
+#### [scripts/setup/bootstrap_demo.py](../../scripts/setup/bootstrap_demo.py)
 **Purpose:** Orchestrates red-line hallucination trap demo (investor/board presentation)
 
 **What It Does:**
@@ -832,7 +832,7 @@ list_users(tenant_id) -> List[Dict]:
 
 ---
 
-#### [demo/agent_protected.py](demo/agent_protected.py)
+#### Protected demo logic
 **Purpose:** AI agent that calls POST /v2/validate before execution
 
 ```python
@@ -855,14 +855,14 @@ def protected_agent():
 
 ---
 
-#### [demo/agent_unprotected.py](demo/agent_unprotected.py)
+#### Unprotected demo logic
 **Purpose:** Same agent but WITHOUT validation → Catastrophic failure
 
 Demonstrates the need for Oriphim.
 
 ---
 
-#### [demo/mock_exchange.py](demo/mock_exchange.py)
+#### Mock exchange simulator
 **Purpose:** Fake exchange API (accepts all trades, returns mock fills)
 
 ```
@@ -876,7 +876,7 @@ Used for demo only (not production).
 
 ### Testing
 
-#### [tests/test_hallucination_traps.py](tests/test_hallucination_traps.py)
+#### [tests/test_hallucination_traps.py](../../tests/test_hallucination_traps.py)
 **Purpose:** Unit tests for entropy scoring, confidence, severity
 
 **Test Cases:**
@@ -890,7 +890,7 @@ Used for demo only (not production).
 
 ---
 
-#### [tests/test_security_phase1.py](tests/test_security_phase1.py)
+#### [tests/test_security_phase1.py](../../tests/test_security_phase1.py)
 **Purpose:** Security & compliance tests
 
 **Test Cases:**
@@ -917,7 +917,7 @@ Used for demo only (not production).
 
 ### Rust Future (Optional)
 
-#### [rust-future/](rust-future/)
+#### [REPO_ORGANIZATION.md](REPO_ORGANIZATION.md)
 **Status:** Scaffolded, NOT integrated into current system
 
 **Purpose:** Future performance optimization (C-speed latency for high-frequency trading)

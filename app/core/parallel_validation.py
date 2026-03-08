@@ -79,20 +79,19 @@ def run_parallel_validation(request_id: str, request: AgentIntentRequest) -> Dic
         action = "CAUTION"
         status_code = 202
         recommendation = "Latency guard triggered; caution flagged for downstream review."
-    elif violations or entropy_score > 0.4:
-        if severity["overall"] >= 3.0:
-            action = "BLOCK"
-            status_code = 424
-            context_reset = True
-            recommendation = (
-                severity["details"][0]["impact_description"]
-                if severity["details"]
-                else "Critical violation detected"
-            )
-        else:
-            action = "REVIEW"
-            status_code = 400
-            recommendation = f"Manual review recommended. Confidence: {confidence.risk_level}"
+    elif violations:
+        action = "BLOCK"
+        status_code = 424
+        context_reset = True
+        recommendation = (
+            severity["details"][0]["impact_description"]
+            if severity["details"]
+            else "Constraint violation detected"
+        )
+    elif entropy_score > 0.4:
+        action = "REVIEW"
+        status_code = 400
+        recommendation = f"Manual review recommended. Confidence: {confidence.risk_level}"
     else:
         action = "ALLOW"
         status_code = 200

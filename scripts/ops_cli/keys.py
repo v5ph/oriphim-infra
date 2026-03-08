@@ -6,8 +6,10 @@ import sys
 import requests
 import json
 from typing import Optional
+import os
 
 BASE_URL = "http://localhost:8000"
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("OPS_CLI_TIMEOUT_SECONDS", "20"))
 
 def generate_key(tenant_id: str, user_id: str, scope: str = "viewer", api_key: Optional[str] = None) -> int:
     """Generate new API key"""
@@ -25,7 +27,7 @@ def generate_key(tenant_id: str, user_id: str, scope: str = "viewer", api_key: O
             f"{BASE_URL}/v1/onboarding/tenants/{tenant_id}/api-keys",
             headers=headers,
             json=payload,
-            timeout=5
+            timeout=REQUEST_TIMEOUT_SECONDS
         )
         
         if response.status_code in [200, 201]:
@@ -39,6 +41,12 @@ def generate_key(tenant_id: str, user_id: str, scope: str = "viewer", api_key: O
             print(response.text)
             return 1
             
+    except requests.exceptions.Timeout:
+        print(
+            f"✗ Error: Request timed out after {REQUEST_TIMEOUT_SECONDS}s. "
+            "Check API server status and retry."
+        )
+        return 2
     except Exception as e:
         print(f"✗ Error: {e}")
         return 2
@@ -53,7 +61,7 @@ def list_keys(tenant_id: str, api_key: Optional[str] = None) -> int:
         response = requests.get(
             f"{BASE_URL}/v1/onboarding/tenants/{tenant_id}/api-keys",
             headers=headers,
-            timeout=5
+            timeout=REQUEST_TIMEOUT_SECONDS
         )
         
         if response.status_code == 200:
@@ -65,6 +73,12 @@ def list_keys(tenant_id: str, api_key: Optional[str] = None) -> int:
             print(response.text)
             return 1
             
+    except requests.exceptions.Timeout:
+        print(
+            f"✗ Error: Request timed out after {REQUEST_TIMEOUT_SECONDS}s. "
+            "Check API server status and retry."
+        )
+        return 2
     except Exception as e:
         print(f"✗ Error: {e}")
         return 2

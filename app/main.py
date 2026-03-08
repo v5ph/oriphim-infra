@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 from app.models import (
     ValidationRequest,
     ValidationResponse,
@@ -78,6 +79,21 @@ def _compute_health_indicator(violation_rate: float, drift_detected: bool) -> In
     return IndicatorStatus.GREEN
 
 app = FastAPI(title="Watcher Protocal", version="2.0")
+
+# Configure CORS for dashboard frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+        os.getenv("DASHBOARD_URL", ""),
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize security subsystem
 try:
@@ -202,10 +218,20 @@ def validate_advanced(request: ValidationRequest) -> ValidationMetrics:
     confidence = calculate_confidence(entropy_score, violations)
     
     # Feature 2: Severity-weighted violations
-    violation_severities = [
+    violation_severity_objects = [
         calculate_violation_severity(v, 0.0) for v in violations
     ]
-    overall_severity = calculate_overall_severity_score(violation_severities)
+    # Convert ViolationSeverity to ViolationDetail for response
+    violation_severities = [
+        ViolationDetail(
+            name=vs.violation,
+            severity_pct=vs.severity_pct,
+            weight=vs.weight,
+            impact_description=vs.impact_description,
+        )
+        for vs in violation_severity_objects
+    ]
+    overall_severity = calculate_overall_severity_score(violation_severity_objects)
     
     # Feature 3: Drift detection
     request_history.record(entropy_score, len(violations))
@@ -216,7 +242,7 @@ def validate_advanced(request: ValidationRequest) -> ValidationMetrics:
         if overall_severity >= 3.0:
             action = "BLOCK"
             status_code = 424
-            recommendation = f"CRITICAL: {violation_severities[0].impact_description if violation_severities else 'High divergence'}"
+            recommendation = f"CRITICAL: {violation_severity_objects[0].impact_description if violation_severity_objects else 'High divergence'}"
         else:
             action = "REVIEW"
             status_code = 400

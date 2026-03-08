@@ -2,7 +2,7 @@
 # Make-based interface to backend REST API
 # See OPS_CLI_GUIDE.md for complete documentation
 
-.PHONY: help health-check server-start server-stop
+.PHONY: help health-check server-start server-stop test tenant-create tenant-list user-create user-list key-generate key-list audit-trail metrics reset-db
 
 # API base configuration
 BASE_URL ?= http://localhost:8000
@@ -20,25 +20,16 @@ help:
 	@echo "  make health-check        - Check system health status"
 	@echo "  make server-start        - Start backend server"
 	@echo "  make server-stop         - Stop backend server"
+	@echo "  make docker-up           - Start services with Docker Compose"
+	@echo "  make docker-down         - Stop Docker services"
+	@echo "  make reset-db            - Delete and reset databases"
 	@echo ""
 	@echo "TESTING:"
-	@echo "  make test-quick          - Run Tier 1-2 tests (smoke + critical)"
-	@echo "  make test-full           - Run all Tier 1-5 tests"
-	@echo "  make test-tier1          - Unit tests only"
-	@echo "  make test-tier2          - API integration tests"
-	@echo "  make test-tier3          - End-to-end workflows"
-	@echo "  make test-tier4          - Load/performance tests"
-	@echo "  make test-tier5          - Security/compliance tests"
-	@echo ""
-	@echo "DEPLOYMENT:"
-	@echo "  make deploy-canary       - Start canary deployment (10% traffic)"
-	@echo "  make deploy-status       - Check deployment status"
-	@echo "  make deploy-rollback ID=<id> - Rollback deployment"
-	@echo ""
-	@echo "INCIDENTS:"
-	@echo "  make incidents-list      - List active incidents"
-	@echo "  make incidents-create SEV=<p1|p2|p3> DESC=\"...\" - Create incident"
-	@echo "  make incidents-resolve ID=<id> - Resolve incident"
+	@echo "  make test                - Run unit tests"
+	@echo "  make test-integration    - Run integration tests"
+	@echo "  make test-e2e            - Run end-to-end tests"
+	@echo "  make test-all            - Run all tests with coverage"
+	@echo "  make test-performance    - Run load tests (requires locust)"
 	@echo ""
 	@echo "TENANTS:"
 	@echo "  make tenant-create NAME=<name> DOMAIN=<domain> - Create tenant"
@@ -78,84 +69,68 @@ server-stop:
 	@echo "Stopping backend server..."
 	@pkill -f "uvicorn app.main:app" || echo "No server running"
 
+docker-up:
+	@echo "Starting services with Docker Compose..."
+	@docker-compose up -d
+	@echo "Services started:"
+	@echo "  Oriphim API: http://localhost:8000"
+	@echo "  Prometheus: http://localhost:9090"
+	@echo "  Grafana: http://localhost:3000"
+
+docker-down:
+	@echo "Stopping Docker services..."
+	@docker-compose down
+
+docker-logs:
+	@docker-compose logs -f oriphim
+
+docker-build:
+	@echo "Building Docker image..."
+	@docker-compose build
+
+# ============================================================================
+# DATABASE MANAGEMENT
+# ============================================================================
+
+reset-db:
+	@echo "Resetting database..."
+	@rm -f .watcher_demo.db .onboarding.db
+	@echo "Database files deleted. Server will create fresh DBs on next startup."
+
 # ============================================================================
 # TESTING
 # ============================================================================
 
-test-quick:
-	@echo "Running quick tests (Tier 1-2)..."
-	@$(PYTHON) scripts/ops_cli/run_tier.py 1 $(API_KEY)
-	@$(PYTHON) scripts/ops_cli/run_tier.py 2 $(API_KEY)
+test:
+	@echo "Running unit tests..."
+	@$(PYTHON) -m pytest tests/test_*.py -v --tb=short
 
-test-full:
-	@echo "Running full test suite (Tier 1-5)..."
-	@for tier in 1 2 3 4 5; do \
-		$(PYTHON) scripts/ops_cli/run_tier.py $$tier $(API_KEY); \
-	done
+test-integration:
+	@echo "Running integration tests..."
+	@$(PYTHON) -m pytest tests/integration/ -v --tb=short
 
-test-tier1:
-	@echo "Running Tier 1 tests (unit tests)..."
-	@$(PYTHON) scripts/ops_cli/run_tier.py 1 $(API_KEY)
+test-e2e:
+	@echo "Running end-to-end tests..."
+	@$(PYTHON) -m pytest tests/e2e/ -v --tb=short
 
-test-tier2:
-	@echo "Running Tier 2 tests (API integration)..."
-	@$(PYTHON) scripts/ops_cli/run_tier.py 2 $(API_KEY)
+test-all:
+	@echo "Running complete test suite..."
+	@$(PYTHON) -m pytest tests/ -v --cov=app --cov-report=html --cov-report=term
 
-test-tier3:
-	@echo "Running Tier 3 tests (end-to-end)..."
-	@$(PYTHON) scripts/ops_cli/run_tier.py 3 $(API_KEY)
-
-test-tier4:
-	@echo "Running Tier 4 tests (load/performance)..."
-	@$(PYTHON) scripts/ops_cli/run_tier.py 4 $(API_KEY)
-
-test-tier5:
-	@echo "Running Tier 5 tests (security/compliance)..."
-	@$(PYTHON) scripts/ops_cli/run_tier.py 5 $(API_KEY)
-
-# ============================================================================
-# DEPLOYMENT
-# ============================================================================
-
-deploy-canary:
-	@echo "Initiating canary deployment..."
-	@$(PYTHON) scripts/ops_cli/deploy.py canary $(API_KEY)
-
-deploy-status:
-	@echo "Checking deployment status..."
-	@$(PYTHON) scripts/ops_cli/deploy.py status $(ID) $(API_KEY)
-
-deploy-rollback:
-	@if [ -z "$(ID)" ]; then \
-		echo "Error: ID required. Usage: make deploy-rollback ID=<deployment_id>"; \
+test-performance:
+	@echo "Running performance tests..."
+	@if command -v locust &> /dev/null; then \
+		echo "Starting server..."; \
+		uvicorn app.main:app --port 8001 & \
+		SERVER_PID=$$!; \
+		sleep 3; \
+		echo "Running load test..."; \
+		locust -f tests/performance/locustfile.py --host http://localhost:8001 --headless --users 50 --spawn-rate 5 --run-time 1m --csv=results/loadtest; \
+		kill $$SERVER_PID; \
+	else \
+		echo "Error: locust not installed. Run: pip install locust"; \
 		exit 1; \
 	fi
-	@echo "Rolling back deployment $(ID)..."
-	@$(PYTHON) scripts/ops_cli/deploy.py rollback $(ID) $(API_KEY)
-
-# ============================================================================
-# INCIDENTS
-# ============================================================================
-
-incidents-list:
-	@echo "Listing active incidents..."
-	@$(PYTHON) scripts/ops_cli/incidents.py list $(API_KEY)
-
-incidents-create:
-	@if [ -z "$(SEV)" ] || [ -z "$(DESC)" ]; then \
-		echo "Error: SEV and DESC required. Usage: make incidents-create SEV=p1 DESC=\"Description\""; \
-		exit 1; \
-	fi
-	@echo "Creating incident..."
-	@$(PYTHON) scripts/ops_cli/incidents.py create $(SEV) "$(DESC)" $(API_KEY)
-
-incidents-resolve:
-	@if [ -z "$(ID)" ]; then \
-		echo "Error: ID required. Usage: make incidents-resolve ID=<incident_id>"; \
-		exit 1; \
-	fi
-	@echo "Resolving incident $(ID)..."
-	@$(PYTHON) scripts/ops_cli/incidents.py resolve $(ID) $(API_KEY)
 
 # ============================================================================
 # TENANTS
@@ -199,13 +174,18 @@ user-list:
 # ============================================================================
 
 key-generate:
-	@if [ -z "$(TENANT)" ] || [ -z "$(USER)" ]; then \
+	@tenant_id="$(TENANT)"; \
+	if [ -z "$$tenant_id" ] && [ -n "$(TENENT)" ]; then \
+		tenant_id="$(TENENT)"; \
+		echo "Warning: TENENT is deprecated; use TENANT instead."; \
+	fi; \
+	if [ -z "$$tenant_id" ] || [ -z "$(USER)" ]; then \
 		echo "Error: TENANT and USER required."; \
 		echo "Usage: make key-generate TENANT=<id> USER=<id> SCOPE=admin"; \
 		exit 1; \
-	fi
-	@echo "Generating API key..."
-	@$(PYTHON) scripts/ops_cli/keys.py generate $(TENANT) $(USER) $(SCOPE) $(API_KEY)
+	fi; \
+	echo "Generating API key..."; \
+	$(PYTHON) scripts/ops_cli/keys.py generate "$$tenant_id" "$(USER)" "$(SCOPE)" "$(API_KEY)"
 
 key-list:
 	@if [ -z "$(TENANT)" ]; then \
@@ -220,9 +200,17 @@ key-list:
 # ============================================================================
 
 audit-trail:
-	@echo "Viewing audit trail..."
-	@curl -s $(BASE_URL)/ops/audit/trail $(if $(API_KEY),-H "Authorization: Bearer $(API_KEY)",) | python -m json.tool
+	@if [ -z "$(TENANT)" ]; then \
+		echo "Error: TENANT required. Usage: make audit-trail TENANT=<tenant_id> API_KEY=<key>"; \
+		exit 1; \
+	fi
+	@if [ -z "$(API_KEY)" ]; then \
+		echo "Error: API_KEY required. Usage: make audit-trail TENANT=<tenant_id> API_KEY=<key>"; \
+		exit 1; \
+	fi
+	@echo "Viewing audit trail for tenant $(TENANT)..."
+	@curl -s "$(BASE_URL)/v1/onboarding/tenants/$(TENANT)/audit-log" -H "Authorization: Bearer $(API_KEY)" | $(PYTHON) -m json.tool
 
 metrics:
 	@echo "Viewing system metrics..."
-	@curl -s $(BASE_URL)/ops/metrics $(if $(API_KEY),-H "Authorization: Bearer $(API_KEY)",) | python -m json.tool
+	@curl -s "$(BASE_URL)/v2/health" | $(PYTHON) -m json.tool

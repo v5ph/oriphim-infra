@@ -6,6 +6,7 @@ LATENCY OPTIMIZATION: Uses Welford's algorithm for O(1) incremental mean/varianc
 instead of storing rolling window for O(n) recomputation each request.
 """
 
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 import statistics
@@ -53,12 +54,14 @@ class RequestHistory:
     """In-memory drift tracker using Welford's algorithm for O(1) updates."""
 
     def __init__(self, window_size: int = 100):
-        self.window_size = window_size  # Not used in Welford, kept for API compat
+        self.window_size = window_size
         self.stats = IncrementalStats()
+        self.violation_counts = deque(maxlen=window_size)
 
     def record(self, divergence: float, violation_count: int):
         """Record a validation result. O(1) time."""
         self.stats.update(divergence)
+        self.violation_counts.append(violation_count)
 
     def get_stats(self):
         """Return mean and std dev of all history."""
