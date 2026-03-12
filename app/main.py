@@ -1,7 +1,8 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Response
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime, timezone
 from app.models import (
     ValidationRequest,
     ValidationResponse,
@@ -9,6 +10,12 @@ from app.models import (
     IntentAck,
     ParallelValidationStatus,
     RewindResponse,
+    PreTradeRequest,
+    PreTradeResponse,
+    TradeOrder,
+    SimulationRequest,
+    SimulationResponse,
+    SimulationSummary,
 )
 from app.models_health import (
     ValidationMetrics,
@@ -30,16 +37,26 @@ from app.core.storage import (
     get_latest_valid_snapshot,
     list_audit_events,
     insert_audit_event,
+    verify_runtime_audit_chain,
+    insert_execution_decision,
+    get_execution_decision,
+    insert_simulation_run,
+    get_simulation_run,
+    reserve_pre_trade_frequency_slot,
 )
+from app.core.trade_guard import evaluate_pre_trade
+from app.core.simulation import run_policy_simulation
 from app.core.compliance import map_violations_to_articles
 from app.core.pdf_export import generate_audit_pdf
 from app.core.security import get_security_headers, init_security, SecurityConfigError
-from app.routes.onboarding import router as onboarding_router
-from datetime import datetime
+from app.core.entropy import load_embedding_model
+from app.routes.onboarding import get_current_tenant, require_permission, router as onboarding_router
 from uuid import uuid4
 import json
 import os
 import logging
+from collections import defaultdict
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +97,46 @@ def _compute_health_indicator(violation_rate: float, drift_detected: bool) -> In
 
 app = FastAPI(title="Watcher Protocal", version="2.0")
 
+# Simple in-memory rate limiting (for production, use Redis)
+_rate_limit_store: defaultdict = defaultdict(list)
+_RATE_LIMIT_REQUESTS = int(os.getenv("RATE_LIMIT_REQUESTS", "100"))
+_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on application startup."""
+    logger.info("Starting Watcher Protocol application...")
+    
+    # Pre-warm embedding model to avoid cold start
+    try:
+        load_embedding_model()
+    except Exception as e:
+        logger.warning(f"Failed to pre-warm embedding model: {e}")
+    
+    logger.info("Application startup complete")
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Structured error responses for unhandled exceptions."""
+    logger.error(
+        "Unhandled exception on %s (request_id=%s)",
+        request.url.path,
+        getattr(request.state, "request_id", "unknown"),
+        exc_info=True,
+    )
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal Server Error",
+            "message": "An internal error occurred.",
+            "request_id": getattr(request.state, "request_id", "unknown")
+        }
+    )
+
+
 # Configure CORS for dashboard frontend
 app.add_middleware(
     CORSMiddleware,
@@ -100,29 +157,60 @@ try:
     init_security()
     logger.info("Security subsystem initialized")
 except SecurityConfigError as e:
-    logger.warning(f"Security configuration incomplete: {e}")
-    logger.warning("Some security features disabled. Configure .env for production.")
+    environment = os.getenv("APP_ENV", "development").lower()
+    allow_insecure_startup = os.getenv("ALLOW_INSECURE_STARTUP", "false").lower() == "true"
+    if allow_insecure_startup and environment in {"development", "dev", "local", "test"}:
+        logger.warning(f"Security configuration incomplete: {e}")
+        logger.warning("ALLOW_INSECURE_STARTUP enabled for non-production environment")
+    else:
+        raise RuntimeError(f"Security configuration incomplete: {e}") from e
 
 # Include onboarding routes
 app.include_router(onboarding_router)
 
 
 @app.middleware("http")
-async def security_headers_middleware(request: Request, call_next):
-    """Add security headers to all responses."""
-    response = await call_next(request)
+async def rate_limit_middleware(request: Request, call_next):
+    """Simple in-memory rate limiting (per IP address).
     
-    # Apply security headers
-    security_headers = get_security_headers()
-    for header, value in security_headers.items():
-        response.headers[header] = value
+    For production: migrate to Redis with sliding window.
+    Limits: {_RATE_LIMIT_REQUESTS} requests per {_RATE_LIMIT_WINDOW_SECONDS}s per IP.
+    """
+    # Skip rate limiting for health checks
+    if request.url.path in ["/v2/health", "/health"]:
+        return await call_next(request)
     
-    return response
+    # Get client IP (considering proxy headers)
+    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    if not client_ip:
+        client_ip = request.client.host if request.client else "unknown"
+    
+    now = time.time()
+    cutoff = now - _RATE_LIMIT_WINDOW_SECONDS
+    
+    # Clean old requests and check limit
+    _rate_limit_store[client_ip] = [t for t in _rate_limit_store[client_ip] if t > cutoff]
+    
+    if len(_rate_limit_store[client_ip]) >= _RATE_LIMIT_REQUESTS:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "Rate Limit Exceeded",
+                "message": f"Maximum {_RATE_LIMIT_REQUESTS} requests per {_RATE_LIMIT_WINDOW_SECONDS}s",
+                "retry_after": int(_RATE_LIMIT_WINDOW_SECONDS)
+            },
+            headers={"Retry-After": str(_RATE_LIMIT_WINDOW_SECONDS)}
+        )
+    
+    # Record this request
+    _rate_limit_store[client_ip].append(now)
+    
+    return await call_next(request)
 
 
 @app.middleware("http")
 async def https_enforcement_middleware(request: Request, call_next):
-    """Enforce HTTPS in production environments."""
+    """Enforce HTTPS in production environments (runs first to ensure headers on redirects)."""
     enforce_https = os.getenv("ENFORCE_HTTPS", "false").lower() == "true"
     
     if enforce_https:
@@ -141,6 +229,19 @@ async def https_enforcement_middleware(request: Request, call_next):
             )
     
     return await call_next(request)
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    """Add security headers to all responses (runs after HTTPS enforcement)."""
+    response = await call_next(request)
+    
+    # Apply security headers
+    security_headers = get_security_headers()
+    for header, value in security_headers.items():
+        response.headers[header] = value
+    
+    return response
 
 
 @app.middleware("http")
@@ -210,7 +311,7 @@ def validate_advanced(request: ValidationRequest) -> ValidationMetrics:
     
     Returns indicator (GREEN/YELLOW/RED) + action_label for decision support.
     """
-    timestamp = datetime.utcnow()
+    timestamp = datetime.now(timezone.utc)
     entropy_score = hallucination_divergence(request.samples)
     violations = check_logic(request)
     
@@ -258,6 +359,7 @@ def validate_advanced(request: ValidationRequest) -> ValidationMetrics:
         articles = map_violations_to_articles(violations)
         insert_audit_event(
             request_id="inline",
+            tenant_id=None,
             agent_id=None,
             event_type="EXECUTION_BLOCKED",
             violations=violations,
@@ -310,14 +412,16 @@ def validate_advanced(request: ValidationRequest) -> ValidationMetrics:
     )
 
 
-@app.get("/v2/health", response_model=HealthMetrics)
-def health_metrics() -> HealthMetrics:
+@app.get("/v2/health")
+def health_metrics() -> Response:
     """
     System health endpoint for monitoring and operations.
     Provides aggregated metrics about recent behavior.
     
     PRIMARY CONTRACT: indicator (GREEN/YELLOW/RED) is single source of truth for CRO.
     CRO polls every 2 seconds for real-time status.
+    
+    Returns 503 Service Unavailable when status is CRITICAL.
     """
     stats = request_history.get_stats()
     
@@ -339,7 +443,7 @@ def health_metrics() -> HealthMetrics:
     # Compute indicator for CRO (primary interface)
     indicator = _compute_health_indicator(violation_rate, False)  # drift_detected would be global flag
     
-    return HealthMetrics(
+    metrics = HealthMetrics(
         uptime_requests=stats["count"],
         recent_divergence_avg=round(recent_divergence_avg, 3),
         recent_violation_rate=round(violation_rate, 3),
@@ -348,10 +452,31 @@ def health_metrics() -> HealthMetrics:
         status=status,
         indicator=indicator,
     )
+    
+    # Return 503 when system is CRITICAL (alerts monitoring systems)
+    if status == "CRITICAL":
+        return JSONResponse(
+            status_code=503,
+            content=metrics.model_dump()
+        )
+    
+    return JSONResponse(
+        status_code=200,
+        content=metrics.model_dump()
+    )
 
 
 @app.post("/v3/intent", response_model=IntentAck)
-def submit_intent(request: AgentIntentRequest, background_tasks: BackgroundTasks) -> IntentAck:
+def submit_intent(
+    request: AgentIntentRequest,
+    background_tasks: BackgroundTasks,
+    current_tenant: str = Depends(get_current_tenant),
+    _: bool = Depends(require_permission("validate")),
+) -> IntentAck:
+    if request.tenant_id and request.tenant_id != current_tenant:
+        raise HTTPException(status_code=403, detail="Cannot submit intents for another tenant")
+
+    request = request.model_copy(update={"tenant_id": current_tenant})
     request_id = str(uuid4())
     insert_request(
         request_id=request_id,
@@ -360,6 +485,7 @@ def submit_intent(request: AgentIntentRequest, background_tasks: BackgroundTasks
         desired_state=request.desired_state,
         samples=request.samples,
         payload=request.model_dump(),
+        tenant_id=current_tenant,
     )
     background_tasks.add_task(run_parallel_validation, request_id, request)
     return IntentAck(
@@ -370,8 +496,12 @@ def submit_intent(request: AgentIntentRequest, background_tasks: BackgroundTasks
 
 
 @app.get("/v3/intent/{request_id}", response_model=ParallelValidationStatus)
-def get_intent_status(request_id: str):
-    result = get_validation_result(request_id)
+def get_intent_status(
+    request_id: str,
+    current_tenant: str = Depends(get_current_tenant),
+    _: bool = Depends(require_permission("read_results")),
+):
+    result = get_validation_result(request_id, tenant_id=current_tenant)
     if result is None:
         return JSONResponse(
             status_code=202,
@@ -391,17 +521,30 @@ def get_intent_status(request_id: str):
 
 
 @app.post("/v3/rewind/{agent_id}", response_model=RewindResponse)
-def rewind_agent(agent_id: str) -> RewindResponse:
-    snapshot = get_latest_valid_snapshot(agent_id)
-    if snapshot is None:
-        return RewindResponse(
-            agent_id=agent_id,
-            snapshot_id=None,
-            restored=False,
-            restored_at=None,
-            system_prompt=None,
-            context=None,
-            variables=None,
+def rewind_agent(
+    agent_id: str,
+    current_tenant: str = Depends(get_current_tenant),
+    _: bool = Depends(require_permission("read_results")),
+) -> RewindResponse:
+    try:
+        snapshot = get_latest_valid_snapshot(agent_id, current_tenant)
+        if snapshot is None:
+            # No snapshot found (agent never saved state)
+            return RewindResponse(
+                agent_id=agent_id,
+                snapshot_id=None,
+                restored=False,
+                restored_at=None,
+                system_prompt=None,
+                context=None,
+                variables=None,
+            )
+    except Exception as e:
+        # Database error or other failure
+        logger.error(f"Failed to retrieve snapshot for {agent_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve snapshot: {str(e)}"
         )
     return RewindResponse(
         agent_id=agent_id,
@@ -415,12 +558,141 @@ def rewind_agent(agent_id: str) -> RewindResponse:
 
 
 @app.get("/v3/compliance/export")
-def export_compliance_ledger(agent_id: str | None = None):
-    events = list_audit_events(agent_id=agent_id)
+def export_compliance_ledger(
+    agent_id: str | None = None,
+    current_tenant: str = Depends(get_current_tenant),
+    _: bool = Depends(require_permission("view_audit")),
+):
+    if not verify_runtime_audit_chain(current_tenant):
+        raise HTTPException(status_code=409, detail="Runtime audit chain verification failed")
+
+    events = list_audit_events(tenant_id=current_tenant, agent_id=agent_id)
     pdf_bytes = generate_audit_pdf("Oriphim Compliance Ledger", events)
     export_id = str(uuid4())
     headers = {
         "Content-Disposition": f"attachment; filename=compliance-ledger-{export_id}.pdf"
     }
     return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
+
+
+@app.post("/v4/execution/pre-trade", response_model=PreTradeResponse)
+def enforce_pre_trade_policy(
+    request: PreTradeRequest,
+    current_tenant: str = Depends(get_current_tenant),
+    _: bool = Depends(require_permission("validate")),
+) -> PreTradeResponse:
+    if request.tenant_id != current_tenant:
+        raise HTTPException(status_code=403, detail="Cannot evaluate pre-trade policy for another tenant")
+
+    decision_id = str(uuid4())
+    reservation_count = reserve_pre_trade_frequency_slot(
+        tenant_id=request.tenant_id,
+        agent_id=request.agent_id,
+        idempotency_key=request.idempotency_key,
+    )
+    effective_account = request.account.model_copy(
+        update={
+            "orders_last_minute": max(request.account.orders_last_minute, max(reservation_count - 1, 0))
+        }
+    )
+
+    result = evaluate_pre_trade(
+        order=request.order,
+        account=effective_account,
+        policy=request.policy,
+    )
+
+    modified_order_model = None
+    if result["modified_order"] is not None:
+        modified_order_model = TradeOrder(**result["modified_order"])
+
+    try:
+        stored_decision = insert_execution_decision(
+            decision_id=decision_id,
+            tenant_id=request.tenant_id,
+            agent_id=request.agent_id,
+            decision=result["decision"],
+            reason=result["reason"],
+            triggered_controls=result["triggered_controls"],
+            order=request.order.model_dump(),
+            account=effective_account.model_dump(mode="json"),
+            policy=request.policy.model_dump(),
+            modified_order=result["modified_order"],
+            idempotency_key=request.idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    if stored_decision["modified_order"] is not None:
+        modified_order_model = TradeOrder(**stored_decision["modified_order"])
+
+    return PreTradeResponse(
+        decision_id=stored_decision["decision_id"],
+        decision=stored_decision["decision"],
+        reason=stored_decision["reason"],
+        triggered_controls=stored_decision["triggered_controls"],
+        modified_order=modified_order_model,
+        created_at=stored_decision["created_at"],
+    )
+
+
+@app.get("/v4/execution/pre-trade/{decision_id}")
+def get_pre_trade_decision(
+    decision_id: str,
+    current_tenant: str = Depends(get_current_tenant),
+    _: bool = Depends(require_permission("read_results")),
+):
+    decision = get_execution_decision(decision_id, current_tenant)
+    if decision is None:
+        raise HTTPException(status_code=404, detail="Decision not found")
+    return decision
+
+
+@app.post("/v4/simulation/run", response_model=SimulationResponse)
+def run_simulation(
+    request: SimulationRequest,
+    current_tenant: str = Depends(get_current_tenant),
+    _: bool = Depends(require_permission("validate")),
+) -> SimulationResponse:
+    if request.tenant_id != current_tenant:
+        raise HTTPException(status_code=403, detail="Cannot run simulations for another tenant")
+
+    simulation_id = str(uuid4())
+
+    simulation = run_policy_simulation(request)
+
+    try:
+        stored_simulation = insert_simulation_run(
+            simulation_id=simulation_id,
+            tenant_id=request.tenant_id,
+            strategy_name=request.strategy_name,
+            request_payload=request.model_dump(),
+            summary=simulation["summary"],
+            policy_blocks=simulation["policy_blocks"],
+            timeline=simulation["timeline"],
+            idempotency_key=request.idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return SimulationResponse(
+        simulation_id=stored_simulation["simulation_id"],
+        tenant_id=stored_simulation["tenant_id"],
+        strategy_name=stored_simulation["strategy_name"],
+        summary=SimulationSummary(**stored_simulation["summary"]),
+        policy_blocks=stored_simulation["policy_blocks"],
+        created_at=stored_simulation["created_at"],
+    )
+
+
+@app.get("/v4/simulation/{simulation_id}")
+def get_simulation(
+    simulation_id: str,
+    current_tenant: str = Depends(get_current_tenant),
+    _: bool = Depends(require_permission("read_results")),
+):
+    simulation = get_simulation_run(simulation_id, current_tenant)
+    if simulation is None:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    return simulation
 

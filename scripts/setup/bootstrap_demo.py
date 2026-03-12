@@ -5,10 +5,12 @@ Bootstrap script to create a demo tenant, user, and API key for local developmen
 Usage:
     python scripts/setup/bootstrap_demo.py
 
-This creates:
+This creates (or reuses if existing):
 - Demo tenant: "Acme Corporation" (acme.com)
 - Demo user: admin@acme.com (Admin role)
 - Demo API key: Printed to console and saved to .demo_api_key file
+
+IDEMPOTENT: Safe to run multiple times. Will reuse existing tenant/user and generate a fresh API key.
 """
 
 import os
@@ -24,11 +26,13 @@ from app.core.onboarding import (
     create_tenant,
     create_user,
     generate_api_key,
+    list_tenants,
+    list_tenant_users,
 )
 
 
 def bootstrap():
-    """Initialize database and create demo credentials."""
+    """Initialize database and create demo credentials (idempotent)."""
     print("Initializing Oriphim demo environment...")
 
     # Initialize databases
@@ -38,23 +42,49 @@ def bootstrap():
     print("  - Initializing onboarding database...")
     init_onboarding_db()
 
-    # Create demo tenant
-    print("  - Creating demo tenant 'Acme Corporation'...")
-    tenant = create_tenant(
-        org_name="Acme Corporation",
-        domain="acme.com",
-        support_tier="standard"
-    )
+    # Create or retrieve demo tenant
+    print("  - Setting up demo tenant 'Acme Corporation'...")
+    try:
+        tenant = create_tenant(
+            org_name="Acme Corporation",
+            domain="acme.com",
+            support_tier="standard"
+        )
+        print(f"    Created new tenant")
+    except ValueError as e:
+        if "already registered" in str(e):
+            # Tenant exists, find it
+            tenants = list_tenants(status="active")
+            tenant = next((t for t in tenants if t["domain"] == "acme.com"), None)
+            if not tenant:
+                raise RuntimeError("Tenant exists but cannot be retrieved") from e
+            print(f"    Using existing tenant")
+        else:
+            raise
+    
     tenant_id = tenant["tenant_id"]
     print(f"    Tenant ID: {tenant_id}")
 
-    # Create demo user
-    print("  - Creating demo user 'admin@acme.com'...")
-    user = create_user(
-        tenant_id=tenant_id,
-        email="admin@acme.com",
-        role="admin"
-    )
+    # Create or retrieve demo user
+    print("  - Setting up demo user 'admin@acme.com'...")
+    try:
+        user = create_user(
+            tenant_id=tenant_id,
+            email="admin@acme.com",
+            role="admin"
+        )
+        print(f"    Created new user")
+    except ValueError as e:
+        if "already registered" in str(e):
+            # User exists, find it
+            users = list_tenant_users(tenant_id, status="active")
+            user = next((u for u in users if u["email"] == "admin@acme.com"), None)
+            if not user:
+                raise RuntimeError("User exists but cannot be retrieved") from e
+            print(f"    Using existing user")
+        else:
+            raise
+    
     user_id = user["user_id"]
     print(f"    User ID: {user_id}")
 

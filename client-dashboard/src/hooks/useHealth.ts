@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import APIClient from '@services/api';
+import APIClient from '@/lib/services/api';
 import type { HealthMetrics } from '@/types';
 import { env } from '@config/env';
 

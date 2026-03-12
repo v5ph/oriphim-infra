@@ -30,8 +30,14 @@ def _compute_action_label(status_code: int, action: str, severity_overall: float
         return ("REVIEW", f"Requires manual review due to {risk} confidence ({confidence_score:.2f})")
     elif action == "CAUTION":
         return ("CAUTION", f"Latency guard triggered ({LATENCY_GUARD_SECONDS*1000:.0f}ms); process continues with flag")
-    else:  # ALLOW
+    elif action == "ALLOW":
         return ("ALLOW", f"Safe to execute (confidence={confidence_score:.2f})")
+    else:
+        # Unknown action - default to BLOCK (safe default)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Unknown action '{action}' detected, defaulting to BLOCK")
+        return ("BLOCK", f"Unknown validation action '{action}'; defaulting to safe BLOCK")
 
 
 def _build_severity(violations: List[str]) -> Dict[str, Any]:
@@ -103,6 +109,7 @@ def run_parallel_validation(request_id: str, request: AgentIntentRequest) -> Dic
         # 1. Snapshot capture (for Agent Rewind)
         if request.state_snapshot:
             insert_state_snapshot(
+                tenant_id=request.tenant_id,
                 agent_id=request.agent_id,
                 request_id=request_id,
                 system_prompt=request.state_snapshot.system_prompt,
@@ -115,6 +122,7 @@ def run_parallel_validation(request_id: str, request: AgentIntentRequest) -> Dic
         articles = map_violations_to_articles(violations)
         insert_audit_event(
             request_id=request_id,
+            tenant_id=request.tenant_id,
             agent_id=request.agent_id,
             event_type="EXECUTION_BLOCKED_424",  # Explicit 424 marker
             violations=violations,
@@ -127,6 +135,7 @@ def run_parallel_validation(request_id: str, request: AgentIntentRequest) -> Dic
     # On ALLOW: capture valid snapshot for rewind capability
     elif action == "ALLOW" and request.state_snapshot:
         insert_state_snapshot(
+            tenant_id=request.tenant_id,
             agent_id=request.agent_id,
             request_id=request_id,
             system_prompt=request.state_snapshot.system_prompt,
@@ -142,6 +151,7 @@ def run_parallel_validation(request_id: str, request: AgentIntentRequest) -> Dic
 
     insert_validation_result(
         request_id=request_id,
+        tenant_id=request.tenant_id,
         status_code=status_code,
         action=action,
         divergence_score=entropy_score,

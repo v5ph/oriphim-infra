@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import type { AuditLogResponse } from '@/types';
-import APIClient from '@services/api';
+import APIClient from '@/lib/services/api';
 import { useAuth } from '@hooks/useAuth';
 import { AuditEventList } from './AuditEventList';
 import { ChainVerificationBadge } from './ChainVerificationBadge';

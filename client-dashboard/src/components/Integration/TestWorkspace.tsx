@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import APIClient from '@services/api';
+import APIClient from '@/lib/services/api';
 
 interface TestRequest {
   endpoint: string;

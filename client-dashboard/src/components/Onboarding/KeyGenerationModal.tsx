@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import APIClient from '@services/api';
+import APIClient from '@/lib/services/api';
 import { useAuth } from '@hooks/useAuth';
 
 interface KeyGenerationModalProps {

@@ -3,7 +3,10 @@ import { useAuth } from '@hooks/useAuth';
 
 export const LoginForm: React.FC = () => {
   const { login, isLoading, error, setError } = useAuth();
-  const [apiKey, setApiKey] = useState('');
+  
+  // Dev convenience: auto-populate API key from env (never in production)
+  const devApiKey = import.meta.env.VITE_DEV_API_KEY || '';
+  const [apiKey, setApiKey] = useState(devApiKey);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,6 +71,11 @@ export const LoginForm: React.FC = () => {
           <div className="mt-6 text-center text-sm text-secondary">
             <p>Need an API key?</p>
             <p className="mt-1">Contact your administrator or visit the onboarding console.</p>
+            {devApiKey && (
+              <p className="mt-2 text-xs text-warning-600 font-medium">
+                DEV MODE: API key pre-populated
+              </p>
+            )}
           </div>
         </div>
 

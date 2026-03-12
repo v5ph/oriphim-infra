@@ -31,9 +31,13 @@ def check_logic(request: ValidationRequest | _RequestLike) -> List[str]:
             violations.append(reason)
 
     if request.metrics:
-        for name, value in request.metrics.items():
-            ok, reason = validator.validate(name, value)
-            if not ok and reason:
-                violations.append(reason)
+        # Prevent DoS via excessive metrics keys
+        if len(request.metrics) > 100:
+            violations.append(f"Metrics dict exceeds 100 keys limit (got {len(request.metrics)})")
+        else:
+            for name, value in request.metrics.items():
+                ok, reason = validator.validate(name, value)
+                if not ok and reason:
+                    violations.append(reason)
 
     return violations

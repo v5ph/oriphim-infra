@@ -9,6 +9,12 @@ import pytest
 _TEST_DB_PATH = Path(__file__).resolve().parents[1] / ".watcher_test.db"
 
 
+os.environ.setdefault("SQLITE_DB_PATH", str(_TEST_DB_PATH))
+os.environ.setdefault("DATABASE_ENCRYPTION_KEY", "0" * 64)
+os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-" + ("x" * 48))
+os.environ.setdefault("ORIPHIM_DISABLE_EMBEDDINGS", "true")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_database() -> None:
     """Configure shared file-backed DB for tests and clean up at session end."""

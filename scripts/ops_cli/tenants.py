@@ -5,9 +5,11 @@ Tenant management CLI wrapper - calls /v1/onboarding/tenants endpoints
 import sys
 import requests
 import json
+import os
 from typing import Optional
 
 BASE_URL = "http://localhost:8000"
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("OPS_CLI_TIMEOUT_SECONDS", "20"))
 
 def create_tenant(name: str, domain: str, tier: str = "standard", api_key: Optional[str] = None) -> int:
     """Create new tenant"""
@@ -26,7 +28,7 @@ def create_tenant(name: str, domain: str, tier: str = "standard", api_key: Optio
             f"{BASE_URL}/v1/onboarding/tenants",
             headers=headers,
             json=payload,
-            timeout=5
+            timeout=REQUEST_TIMEOUT_SECONDS
         )
         
         if response.status_code in [200, 201]:
@@ -50,7 +52,7 @@ def list_tenants(api_key: Optional[str] = None) -> int:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         
-        response = requests.get(f"{BASE_URL}/v1/onboarding/tenants", headers=headers, timeout=5)
+        response = requests.get(f"{BASE_URL}/v1/onboarding/tenants", headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
         
         if response.status_code == 200:
             data = response.json()

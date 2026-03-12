@@ -48,6 +48,23 @@ class IncrementalStats:
         variance = self.M2 / (self.count - 1)
         std_dev = variance ** 0.5
         return {"mean": self.mean, "std_dev": std_dev, "count": self.count}
+    
+    def to_dict(self) -> dict:
+        """Serialize state for persistence (prevents count type issues)."""
+        return {
+            "count": int(self.count),  # Ensure integer serialization
+            "mean": float(self.mean),
+            "M2": float(self.M2)
+        }
+    
+    @classmethod
+    def from_dict(cls, state: dict) -> 'IncrementalStats':
+        """Deserialize state from persistence."""
+        instance = cls()
+        instance.count = int(state.get("count", 0))  # Type-safe deserialization
+        instance.mean = float(state.get("mean", 0.0))
+        instance.M2 = float(state.get("M2", 0.0))
+        return instance
 
 
 class RequestHistory:
@@ -90,16 +107,16 @@ class RequestHistory:
         mean = stats["mean"]
         std_dev = stats["std_dev"]
 
-        if std_dev == 0:  # No variation in history
+        if std_dev <= 0:  # No variation in history (0 or invalid)
             return DriftAlert(
                 detected=False,
                 z_score=0.0,
                 historical_mean=mean,
                 current_value=current_divergence,
-                explanation="No variation in historical data",
+                explanation="Cannot compute z-score: zero or negative std_dev (no variation in historical data)",
             )
 
-        z_score = (current_divergence - mean) / std_dev
+        z_score = (current_divergence - mean) / std_dev  # Protected by std_dev > 0 check above
         detected = abs(z_score) > 2.5
 
         if detected:

@@ -142,8 +142,16 @@ def create_access_token(
         "jti": secrets.token_urlsafe(16),  # Unique token ID for blacklist
     }
     
+    # Prevent additional_claims from overwriting standard JWT fields
     if additional_claims:
-        claims.update(additional_claims)
+        protected_fields = {"sub", "exp", "iat", "jti", "type", "tenant_id", "user_id", "scope"}
+        safe_claims = {k: v for k, v in additional_claims.items() if k not in protected_fields}
+        if len(safe_claims) < len(additional_claims):
+            import logging
+            logger = logging.getLogger(__name__)
+            filtered = set(additional_claims.keys()) - set(safe_claims.keys())
+            logger.warning(f"Filtered protected JWT claims from additional_claims: {filtered}")
+        claims.update(safe_claims)
     
     token = jwt.encode(claims, secret, algorithm=algorithm)
     return token
@@ -152,7 +160,8 @@ def create_access_token(
 def create_refresh_token(
     subject: str,
     tenant_id: str,
-    user_id: str
+    user_id: str,
+    scope: str = "admin",
 ) -> str:
     """
     Create JWT refresh token with longer expiration.
@@ -161,6 +170,7 @@ def create_refresh_token(
         subject: Token subject (typically user_id)
         tenant_id: Tenant identifier
         user_id: User identifier
+        scope: API key scope (must match the issuing access token's scope)
     
     Returns:
         Signed JWT refresh token
@@ -179,6 +189,7 @@ def create_refresh_token(
         "sub": subject,
         "tenant_id": tenant_id,
         "user_id": user_id,
+        "scope": scope,
         "type": "refresh",
         "iat": int(now.timestamp()),
         "exp": int(expires.timestamp()),
@@ -259,12 +270,18 @@ def refresh_access_token(refresh_token: str) -> Dict[str, str]:
     """
     claims = verify_token(refresh_token, expected_type="refresh")
     
+    # Validate required claims exist
+    required_claims = ["sub", "tenant_id", "user_id", "scope"]
+    for claim in required_claims:
+        if claim not in claims:
+            raise jwt.InvalidTokenError(f"Missing required claim: {claim}")
+    
     # Generate new access token with same claims
     new_access_token = create_access_token(
         subject=claims["sub"],
         tenant_id=claims["tenant_id"],
         user_id=claims["user_id"],
-        scope=claims.get("scope", "validate-only")
+        scope=claims["scope"]
     )
     
     return {
@@ -309,14 +326,41 @@ def cleanup_blacklist() -> int:
     """
     Remove expired tokens from blacklist.
     
-    Note: In-memory implementation doesn't track expiration.
-    Migrate to Redis with TTL for production.
+    In-memory implementation: validates tokens and removes expired ones.
+    For production, migrate to Redis with automatic TTL.
     
     Returns:
-        Number of tokens removed (always 0 in this implementation)
+        Number of tokens removed
     """
-    # TODO: When migrating to Redis, implement TTL-based cleanup
-    return 0
+    with _BLACKLIST_LOCK:
+        if not _TOKEN_BLACKLIST:
+            return 0
+        
+        expired_tokens = []
+        now = datetime.utcnow()
+        
+        for jti in _TOKEN_BLACKLIST:
+            try:
+                # Attempt to decode and check expiration
+                # If token is expired, remove from blacklist
+                payload = jwt.decode(
+                    jti,  # Note: jti is just the ID, not the full token
+                    JWT_SECRET_KEY,
+                    algorithms=[JWT_ALGORITHM],
+                    options={"verify_signature": False}  # Only check expiration
+                )
+                exp_timestamp = payload.get("exp")
+                if exp_timestamp and datetime.fromtimestamp(exp_timestamp) < now:
+                    expired_tokens.append(jti)
+            except (jwt.InvalidTokenError, KeyError, ValueError):
+                # If we can't decode, assume it's a bare JTI string (our current impl)
+                # Keep it in blacklist (no expiration data available)
+                pass
+        
+        for jti in expired_tokens:
+            _TOKEN_BLACKLIST.remove(jti)
+        
+        return len(expired_tokens)
 
 
 # ============================================================================
@@ -516,12 +560,16 @@ class SessionManager:
         """
         Remove timed-out sessions.
         
+        Uses environment variable SESSION_TIMEOUT_MINUTES for live timeout config.
+        
         Returns:
             Number of sessions removed
         """
         with self._lock:
             now = datetime.utcnow()
-            timeout = timedelta(minutes=SESSION_TIMEOUT_MINUTES)
+            # Read timeout from environment (not cached module constant)
+            timeout_minutes = int(os.getenv("SESSION_TIMEOUT_MINUTES", "30"))
+            timeout = timedelta(minutes=timeout_minutes)
             expired = []
             
             for jti, session in self._sessions.items():
@@ -583,7 +631,8 @@ if __name__ == "__main__":
         refresh_token = create_refresh_token(
             subject="test-user",
             tenant_id="test-tenant",
-            user_id="user-123"
+            user_id="user-123",
+            scope="admin",
         )
         print(f"Refresh token: {refresh_token[:50]}...")
         

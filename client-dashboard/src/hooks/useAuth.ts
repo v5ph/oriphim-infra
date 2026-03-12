@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import APIClient from '@services/api';
+import APIClient from '@/lib/services/api';
 import { STORAGE_KEYS } from '@lib/constants/storage';
 import { getStorageItem, removeStorageItem, setStorageItem } from '@lib/utils/storage';
 

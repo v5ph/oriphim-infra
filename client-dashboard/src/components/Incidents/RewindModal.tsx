@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import type { RewindResponse } from '@/types';
-import APIClient from '@services/api';
+import APIClient from '@/lib/services/api';
 
 interface RewindModalProps {
   agentId: string | null;

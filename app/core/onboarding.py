@@ -16,6 +16,7 @@ import os
 import sqlite3
 import threading
 import hashlib
+import hmac
 import secrets
 import bcrypt
 from datetime import datetime, timedelta
@@ -40,6 +41,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_DUMMY_API_KEY_HASH = bcrypt.hashpw(b"oriphim-invalid-api-key", bcrypt.gensalt(rounds=12))
+
 _DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / ".watcher_demo.db"
 
 
@@ -52,7 +55,22 @@ def _get_db_path() -> str:
     if raw_path == ":memory:":
         return raw_path
     return Path(raw_path).expanduser().resolve().as_posix()
+
 _LOCK = threading.Lock()
+_BOOTSTRAP_LOCKS: Dict[str, threading.Lock] = {}  # Per-tenant bootstrap locks
+_BOOTSTRAP_LOCKS_LOCK = threading.Lock()  # Protect _BOOTSTRAP_LOCKS dict
+
+
+def _get_bootstrap_lock(tenant_id: str) -> threading.Lock:
+    """Get or create a per-tenant bootstrap lock.
+    
+    Prevents TOCTOU race condition during first user creation.
+    Multiple threads racing to create the first user will serialize via this lock.
+    """
+    with _BOOTSTRAP_LOCKS_LOCK:
+        if tenant_id not in _BOOTSTRAP_LOCKS:
+            _BOOTSTRAP_LOCKS[tenant_id] = threading.Lock()
+        return _BOOTSTRAP_LOCKS[tenant_id]
 
 
 class Role(str, Enum):
@@ -85,11 +103,17 @@ class APIKeyScope(str, Enum):
 
 
 def _get_encryption_key() -> Optional[str]:
-    """Get database encryption key from environment."""
+    """Get database encryption key from environment.
+
+    Validates key format before using in PRAGMA statement.
+    Only accepts 64-char hex strings to prevent SQL injection.
+    """
     key = os.getenv("DATABASE_ENCRYPTION_KEY")
-    if key and len(key) == 64:
-        return f'"x\'{key}\'"'
-    return None
+    if not key or len(key) != 64:
+        return None
+    if not all(c in "0123456789abcdefABCDEF" for c in key):
+        raise ValueError("Invalid DATABASE_ENCRYPTION_KEY format: must be 64 hex characters")
+    return f'"x\'{key}\'"'
 
 
 def _connect() -> sqlite3.Connection:
@@ -124,6 +148,20 @@ def _connect() -> sqlite3.Connection:
         conn = sqlite3.connect(db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         return conn
+
+
+def _get_table_columns(cur: sqlite3.Cursor, table_name: str) -> set[str]:
+    cur.execute(f"PRAGMA table_info({table_name})")
+    return {row[1] for row in cur.fetchall()}
+
+
+def _ensure_column(cur: sqlite3.Cursor, table_name: str, column_name: str, definition: str) -> None:
+    if column_name not in _get_table_columns(cur, table_name):
+        cur.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
+
+
+def _api_key_digest(api_key: str) -> str:
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
 
 def _ensure_role_permissions_schema(conn: sqlite3.Connection) -> None:
@@ -241,9 +279,13 @@ def init_onboarding_db() -> None:
             )
             """
         )
+        _ensure_column(cur, "api_keys", "api_key_digest", "TEXT")
         
         cur.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id)")
+        cur.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_digest ON api_keys(api_key_digest) WHERE api_key_digest IS NOT NULL"
+        )
         
         # Identity audit log
         cur.execute(
@@ -547,7 +589,8 @@ def generate_api_key(
     user_id: str,
     scope: str,
     expires_in_days: int = 90,
-    description: str = ""
+    description: str = "",
+    actor_id: Optional[str] = None,
 ) -> Dict[str, str]:
     """
     Generate a new API key for a user.
@@ -576,6 +619,7 @@ def generate_api_key(
     # Generate 32-byte random secret (base64-url encoded = 43 chars)
     api_key = secrets.token_urlsafe(32)
     key_id = str(uuid4())
+    api_key_digest = _api_key_digest(api_key)
     
     # Hash secret with bcrypt (cost=12 = slow intentional)
     secret_hash = bcrypt.hashpw(api_key.encode(), bcrypt.gensalt(rounds=12))
@@ -590,19 +634,19 @@ def generate_api_key(
         cur.execute(
             """
             INSERT INTO api_keys (
-                key_id, tenant_id, user_id, secret_hash, scope, 
+                key_id, tenant_id, user_id, secret_hash, api_key_digest, scope,
                 status, expires_at, created_at, usage_count
             )
-            VALUES (?, ?, ?, ?, ?, 'active', ?, ?, 0)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, 0)
             """,
-            (key_id, tenant_id, user_id, secret_hash.decode(), scope, expires_at, now.isoformat())
+            (key_id, tenant_id, user_id, secret_hash.decode(), api_key_digest, scope, expires_at, now.isoformat())
         )
         
         # Audit event
         _insert_audit_log(
             conn,
             tenant_id=tenant_id,
-            actor_id=user_id,
+            actor_id=actor_id or user_id,
             event_type="api_key_generated",
             target=key_id,
             details={"scope": scope, "expires_in_days": expires_in_days}
@@ -638,54 +682,89 @@ def validate_api_key(api_key: str) -> Optional[Dict[str, Any]]:
     Returns:
         Key metadata if valid, None if invalid
     """
+    key_digest = _api_key_digest(api_key)
+    now = datetime.utcnow()
+
     with _LOCK:
         conn = _connect()
         cur = conn.cursor()
-        
-        # Get all active keys (we'll hash each and compare)
         cur.execute(
             """
-            SELECT key_id, tenant_id, user_id, secret_hash, scope, expires_at, status
+            SELECT key_id, tenant_id, user_id, secret_hash, api_key_digest, scope, expires_at, status
             FROM api_keys
-            WHERE status = 'active'
+            WHERE status = 'active' AND api_key_digest = ?
+            LIMIT 1
+            """,
+            (key_digest,),
+        )
+        row = cur.fetchone()
+
+        stored_hash = _DUMMY_API_KEY_HASH
+        digest_match = False
+        if row is not None:
+            stored_hash = row["secret_hash"].encode() if isinstance(row["secret_hash"], str) else row["secret_hash"]
+            digest_match = hmac.compare_digest(row["api_key_digest"] or "", key_digest)
+
+        secret_match = bcrypt.checkpw(api_key.encode(), stored_hash)
+        if row is not None and digest_match and secret_match:
+            expires_at = datetime.fromisoformat(row["expires_at"])
+            if expires_at < now:
+                conn.close()
+                logger.warning(f"Key expired: {row['key_id']}")
+                return None
+
+            cur.execute(
+                "UPDATE api_keys SET last_used_at = ?, usage_count = MIN(usage_count + 1, 9223372036854775807) WHERE key_id = ?",
+                (now.isoformat(), row["key_id"])
+            )
+            conn.commit()
+            conn.close()
+            return {
+                "key_id": row["key_id"],
+                "tenant_id": row["tenant_id"],
+                "user_id": row["user_id"],
+                "scope": row["scope"]
+            }
+
+        cur.execute(
+            """
+            SELECT key_id, tenant_id, user_id, secret_hash, scope, expires_at
+            FROM api_keys
+            WHERE status = 'active' AND api_key_digest IS NULL
             """
         )
-        
-        rows = cur.fetchall()
+        legacy_rows = cur.fetchall()
+        for legacy_row in legacy_rows:
+            legacy_hash = legacy_row["secret_hash"].encode() if isinstance(legacy_row["secret_hash"], str) else legacy_row["secret_hash"]
+            if not bcrypt.checkpw(api_key.encode(), legacy_hash):
+                continue
+
+            expires_at = datetime.fromisoformat(legacy_row["expires_at"])
+            if expires_at < now:
+                conn.close()
+                logger.warning(f"Key expired: {legacy_row['key_id']}")
+                return None
+
+            cur.execute(
+                """
+                UPDATE api_keys
+                SET api_key_digest = ?, last_used_at = ?, usage_count = MIN(usage_count + 1, 9223372036854775807)
+                WHERE key_id = ?
+                """,
+                (key_digest, now.isoformat(), legacy_row["key_id"])
+            )
+            conn.commit()
+            conn.close()
+            return {
+                "key_id": legacy_row["key_id"],
+                "tenant_id": legacy_row["tenant_id"],
+                "user_id": legacy_row["user_id"],
+                "scope": legacy_row["scope"]
+            }
+
         conn.close()
-        
-        now = datetime.utcnow()
-        
-        for row in rows:
-            stored_hash = row["secret_hash"].encode() if isinstance(row["secret_hash"], str) else row["secret_hash"]
-            
-            # Verify bcrypt hash
-            if bcrypt.checkpw(api_key.encode(), stored_hash):
-                # Check expiration
-                expires_at = datetime.fromisoformat(row["expires_at"])
-                if expires_at < now:
-                    logger.warning(f"Key expired: {row['key_id']}")
-                    return None
-                
-                # Update last_used_at
-                with _LOCK:
-                    conn = _connect()
-                    cur = conn.cursor()
-                    cur.execute(
-                        "UPDATE api_keys SET last_used_at = ?, usage_count = usage_count + 1 WHERE key_id = ?",
-                        (now.isoformat(), row["key_id"])
-                    )
-                    conn.commit()
-                    conn.close()
-                
-                return {
-                    "key_id": row["key_id"],
-                    "tenant_id": row["tenant_id"],
-                    "user_id": row["user_id"],
-                    "scope": row["scope"]
-                }
-        
-        return None
+    
+    return None
 
 
 def revoke_api_key(key_id: str, actor_id: Optional[str] = None) -> bool:
@@ -800,7 +879,7 @@ def _insert_audit_log(
         (tenant_id,)
     )
     last_row = cur.fetchone()
-    prev_hash = last_row["event_hash"] if last_row else ""
+    prev_hash = last_row["event_hash"] if last_row else "0" * 64
     
     # Create this entry's hash
     now = datetime.utcnow().isoformat()
@@ -855,6 +934,7 @@ def list_audit_log(
                 SELECT * FROM identity_audit_log
                 WHERE tenant_id = ? AND event_type = ? AND created_at > ?
                 ORDER BY created_at DESC
+                LIMIT 10000
                 """,
                 (tenant_id, event_type, cutoff)
             )
@@ -864,6 +944,7 @@ def list_audit_log(
                 SELECT * FROM identity_audit_log
                 WHERE tenant_id = ? AND created_at > ?
                 ORDER BY created_at DESC
+                LIMIT 10000
                 """,
                 (tenant_id, cutoff)
             )
@@ -880,6 +961,7 @@ def list_audit_log(
                 "actor_id": row["actor_id"],
                 "details": json.loads(row["details_json"]),
                 "created_at": row["created_at"],
+                "prev_hash": row["prev_hash"],
                 "event_hash": row["event_hash"]
             })
         
@@ -905,7 +987,7 @@ def verify_audit_chain(tenant_id: str) -> bool:
         rows = cur.fetchall()
         conn.close()
         
-        prev_hash = ""
+        prev_hash = "0" * 64
         
         for row in rows:
             # Verify that stored prev_hash matches actual previous hash

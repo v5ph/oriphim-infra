@@ -35,7 +35,15 @@ def generate_audit_pdf(title: str, entries: List[Dict[str, str]]) -> bytes:
             hash_suffix = f" [HASH: {event_hash[:16]}...]"
         
         line = f"[{entry.get('created_at','')}] {entry.get('event_type','')}: {entry.get('message','')}{hash_suffix}"
-        lines.append(line[:140])  # Slightly longer line to accommodate hash
+        # Warn if truncation occurs (audit data loss)
+        if len(line) > 140:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"PDF audit line truncated from {len(line)} to 140 chars. "
+                f"Event: {entry.get('event_type', 'unknown')}, Hash: {event_hash[:8] if event_hash else 'none'}"
+            )
+        lines.append(line[:140])
     
     if not lines:
         lines = [title, "No audit events found."]

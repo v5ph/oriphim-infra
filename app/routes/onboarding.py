@@ -54,7 +54,7 @@ router = APIRouter(prefix="/v1/onboarding", tags=["onboarding"])
 
 class TenantCreateRequest(BaseModel):
     org_name: str = Field(..., min_length=3, max_length=255)
-    domain: str = Field(..., pattern=r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$")
+    domain: str = Field(..., min_length=3, max_length=253, pattern=r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$")
     support_tier: str = Field(default="standard", pattern="^(standard|premium|enterprise)$")
 
 
@@ -87,13 +87,30 @@ async def get_current_key_metadata(authorization: Optional[str] = Header(None)) 
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    
-    api_key = authorization.replace("Bearer ", "")
-    
-    key_metadata = validate_api_key(api_key)
+
+    bearer_token = authorization.replace("Bearer ", "", 1).strip()
+
+    if bearer_token.count(".") == 2:
+        try:
+            claims = verify_token(bearer_token, expected_type="access")
+            if not session_manager.is_session_valid(claims["jti"]):
+                raise HTTPException(status_code=401, detail="Session expired or invalid")
+            session_manager.update_activity(claims["jti"])
+            return {
+                "tenant_id": claims["tenant_id"],
+                "user_id": claims["user_id"],
+                "scope": claims["scope"],
+                "auth_type": "access_token",
+            }
+        except HTTPException:
+            raise
+        except jwt.InvalidTokenError as exc:
+            raise HTTPException(status_code=401, detail="Invalid or expired access token") from exc
+
+    key_metadata = validate_api_key(bearer_token)
     if not key_metadata:
         raise HTTPException(status_code=401, detail="Invalid or expired API key")
-    
+
     return key_metadata
 
 
@@ -182,16 +199,21 @@ async def create_tenant_endpoint(request: TenantCreateRequest):
 
 
 @router.get("/tenants")
-async def list_tenants_endpoint():
+async def list_tenants_endpoint(
+    current_tenant: str = Depends(get_current_tenant)
+):
     """
     List all tenant organizations.
 
-    Used by MVP onboarding flow to discover tenant IDs after creation.
+    Requires authentication to prevent tenant enumeration attacks.
+    Returns tenant info for the authenticated user's tenant only.
     """
-    tenants = list_tenants()
+    tenant = get_tenant(current_tenant)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
 
     return {
-        "tenant_count": len(tenants),
+        "tenant_count": 1,
         "tenants": [
             {
                 "tenant_id": tenant["tenant_id"],
@@ -199,10 +221,9 @@ async def list_tenants_endpoint():
                 "domain": tenant["domain"],
                 "status": tenant["status"],
                 "support_tier": tenant["support_tier"],
-                "created_at": tenant["created_at"]
+                "created_at": tenant["created_at"],
             }
-            for tenant in tenants
-        ]
+        ],
     }
 
 
@@ -245,27 +266,26 @@ async def create_user_endpoint(
     - analyst: Can validate and view results
     - viewer: Read-only access to audit trail
     """
-    existing_users = list_tenant_users(tenant_id)
-    is_bootstrap = len(existing_users) == 0
+    # Check bootstrap mode atomically (within transaction)
+    from app.core.onboarding import _get_bootstrap_lock
     
-    if is_bootstrap:
-        logger.info(f"Bootstrap mode: Creating first user for tenant {tenant_id}")
-        if request.role != "admin":
-            raise HTTPException(
-                status_code=400, 
-                detail="First user must have admin role (bootstrap)"
-            )
-    else:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(
-                status_code=401,
-                detail="Missing or invalid Authorization header"
-            )
+    bootstrap_lock = _get_bootstrap_lock(tenant_id)
+    actor_id: Optional[str] = None
+    with bootstrap_lock:
+        existing_users = list_tenant_users(tenant_id)
+        is_bootstrap = len(existing_users) == 0
         
-        api_key = authorization.replace("Bearer ", "")
-        key_metadata = validate_api_key(api_key)
-        if not key_metadata:
-            raise HTTPException(status_code=401, detail="Invalid or expired API key")
+        if is_bootstrap:
+            logger.info(f"Bootstrap mode: Creating first user for tenant {tenant_id}")
+            if request.role != "admin":
+                raise HTTPException(
+                    status_code=400, 
+                    detail="First user must have admin role (bootstrap)"
+                )
+            actor_id = f"bootstrap:{request.email.lower()}"
+
+    if not is_bootstrap:
+        key_metadata = await get_current_key_metadata(authorization)
         
         if tenant_id != key_metadata["tenant_id"]:
             raise HTTPException(status_code=403, detail="Cannot manage other tenants")
@@ -283,6 +303,7 @@ async def create_user_endpoint(
                 status_code=403,
                 detail="Insufficient permissions for action: manage_users"
             )
+        actor_id = key_metadata["user_id"]
     
     try:
         user = create_user(
@@ -290,7 +311,7 @@ async def create_user_endpoint(
             email=request.email,
             role=request.role,
             mfa_enabled=request.mfa_enabled,
-            actor_id=None
+            actor_id=actor_id
         )
         
         return {
@@ -339,6 +360,7 @@ async def change_user_role_endpoint(
     user_id: str,
     request: UserRoleChangeRequest,
     current_tenant: str = Depends(get_current_tenant),
+    key_metadata: Dict[str, Any] = Depends(get_current_key_metadata),
     _: bool = Depends(require_permission("manage_users"))
 ):
     """
@@ -353,7 +375,7 @@ async def change_user_role_endpoint(
         user = change_user_role(
             user_id=user_id,
             new_role=request.new_role,
-            actor_id=None  # Extract from token in real implementation
+            actor_id=key_metadata["user_id"]
         )
         
         return {
@@ -392,6 +414,7 @@ async def create_api_key_endpoint(
     try:
         existing_keys = list_api_keys(tenant_id)
         is_bootstrap = len(existing_keys) == 0
+        actor_id: Optional[str] = None
 
         if is_bootstrap:
             if not request.user_id:
@@ -412,15 +435,10 @@ async def create_api_key_endpoint(
                 )
 
             user_id = request.user_id
+            actor_id = request.user_id
             logger.info(f"Bootstrap mode: Creating first API key for tenant {tenant_id}")
         else:
-            if not authorization or not authorization.startswith("Bearer "):
-                raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-
-            api_key = authorization.replace("Bearer ", "")
-            key_metadata = validate_api_key(api_key)
-            if not key_metadata:
-                raise HTTPException(status_code=401, detail="Invalid or expired API key")
+            key_metadata = await get_current_key_metadata(authorization)
 
             if tenant_id != key_metadata["tenant_id"]:
                 raise HTTPException(status_code=403, detail="Cannot create keys for other tenants")
@@ -440,12 +458,14 @@ async def create_api_key_endpoint(
                 )
 
             user_id = key_metadata["user_id"]
+            actor_id = key_metadata["user_id"]
         
         key = generate_api_key(
             tenant_id=tenant_id,
             user_id=user_id,
             scope=request.scope,
-            expires_in_days=request.expires_in_days
+            expires_in_days=request.expires_in_days,
+            actor_id=actor_id,
         )
         
         return {
@@ -497,6 +517,7 @@ async def revoke_api_key_endpoint(
     tenant_id: str,
     key_id: str,
     current_tenant: str = Depends(get_current_tenant),
+    key_metadata: Dict[str, Any] = Depends(get_current_key_metadata),
     _: bool = Depends(require_permission("manage_config"))
 ):
     """
@@ -509,7 +530,7 @@ async def revoke_api_key_endpoint(
         raise HTTPException(status_code=403, detail="Cannot manage other tenants")
     
     try:
-        revoke_api_key(key_id, actor_id=None)  # Extract from token
+        revoke_api_key(key_id, actor_id=key_metadata["user_id"])
         return {}
     
     except ValueError as e:
@@ -632,7 +653,8 @@ async def login(request: LoginRequest, http_request: Request):
     refresh_token_str = create_refresh_token(
         subject=key_metadata["user_id"],
         tenant_id=key_metadata["tenant_id"],
-        user_id=key_metadata["user_id"]
+        user_id=key_metadata["user_id"],
+        scope=key_metadata["scope"],
     )
     
     # Decode to get JTI for session management
